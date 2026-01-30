@@ -1,0 +1,11 @@
+[project]
+name = "substance-painter-mcp"
+version = "0.1.0"
+description = "MCP server for Substance Painter"
+requires-python = ">=3.9"
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+substance-painter-mcp = "src.server:main"
