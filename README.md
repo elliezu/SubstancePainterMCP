@@ -21,7 +21,7 @@ Claude가 Substance Painter를 제어할 수 있게 해주는 MCP(Model Context 
 ### 1. 저장소 클론
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/SubstancePainterMCP.git
+git clone https://github.com/elliezu/SubstacePainterMCP.git
 cd SubstancePainterMCP
 ```
 
