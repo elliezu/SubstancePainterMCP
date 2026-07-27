@@ -21,3 +21,9 @@ Thumbs.db
 
 # Project specific
 *.log
+
+# Build and test artifacts
+build/
+dist/
+*.egg-info/
+.pytest_cache/

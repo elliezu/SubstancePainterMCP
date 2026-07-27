@@ -1,152 +1,154 @@
-# Substance Painter MCP Server
+# Substance Painter MCP
 
-Claude가 Substance Painter를 제어할 수 있게 해주는 MCP(Model Context Protocol) 서버입니다.
+MCP 클라이언트가 로컬 Adobe Substance 3D Painter를 조회하고 레이어를 편집할 수 있게 해주는 서버입니다.
 
-## 주요 기능
+## 현재 상태
 
-- 프로젝트 정보 조회 (텍스처셋 목록 등)
-- 레이어 구조 확인
-- Fill Layer, Group 생성
-- Python 코드 직접 실행 (고급 기능)
-- 여러 텍스처셋에 일괄 레이어 적용
+- 버전: **0.2.0**
+- 라이브 검증: **Substance 3D Painter 12.1.1 / Python API 0.3.5**
+- MCP SDK: 안정판 **1.x** (`mcp>=1.28,<2`)
+- 전송: MCP stdio → Painter HTTP remote scripting (`localhost:60041`)
+- 지원 Python: 3.10+
 
-## 요구사항
+Painter가 보고하는 Python API 버전과 실제 capability가 어긋날 수 있어서, 버전 문자열 대신
+`get_capabilities`로 런타임 기능을 탐지합니다.
 
-- **Substance Painter 2021.1+** (Remote Scripting 지원 버전)
-- **Python 3.9+**
-- **MCP 패키지**
+## 도구
 
-## 설치 방법
+### 조회
 
-### 1. 저장소 클론
+- `painter_status`: 연결, Painter/API 버전, 프로젝트 상태
+- `get_project_info`: 프로젝트 경로와 Texture Set
+- `get_capabilities`: 채널, 블렌딩 모드, 버전별 기능
+- `audit_project`: 해상도/채널/레이어 위생/outdated resource 감사
+- `list_layers`: UID 기반 재귀 레이어 트리
+- `find_layers`: 이름/타입/가시성 기반 검색과 부모 경로
+- `list_export_presets`: 내장/선반 내보내기 프리셋
+- `plan_texture_export`: 파일을 쓰기 전 정확한 출력 목록/충돌 검증
+- `export_textures`: 허용 루트 안에 내보내고 생성 파일/크기 검증
+- `list_project_resources`: 프로젝트가 참조하는 리소스
+- `search_resources`: 리소스 타입/usage/URL 검색
 
-```bash
+### 편집
+
+- `create_fill_layer`, `create_paint_layer`, `create_group`
+- `set_fill_base_color`: sRGB 입력을 Painter 작업 색공간으로 변환
+- `set_fill_channels`: Roughness/Metallic/Emission 등 다중 uniform 채널
+- `set_layer_mask`: White/Black 마스크 추가·변경·제거
+- `set_layer_properties`: 가시성, 채널별 opacity/blend mode
+- `rename_layer`, `select_layers`, `delete_layer`
+
+레이어 이름은 중복될 수 있으므로 편집 도구는 `list_layers`가 반환한 UID를 사용합니다.
+
+### 고급
+
+- `execute_python`: 임의 Painter Python 실행. 기본 비활성화이며 명시적으로
+  `SP_MCP_ALLOW_EXECUTE_PYTHON=1`을 설정해야 합니다.
+
+## 설치
+
+```powershell
 git clone https://github.com/elliezu/SubstancePainterMCP.git
 cd SubstancePainterMCP
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e .
 ```
 
-### 2. MCP 패키지 설치
+개발/테스트 의존성까지 설치하려면:
 
-```bash
-pip install mcp
+```powershell
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.venv\Scripts\python.exe -m pytest
 ```
 
-또는 전체 의존성 설치:
+## Painter 실행
 
-```bash
-pip install -e .
-```
+Painter는 반드시 새 프로세스로 다음 옵션과 함께 실행해야 합니다.
 
-### 3. Substance Painter 설정
-
-Painter를 **Remote Scripting 활성화** 상태로 실행해야 합니다.
-
-#### Windows:
-```bash
+```powershell
 "C:\Program Files\Adobe\Adobe Substance 3D Painter\Adobe Substance 3D Painter.exe" --enable-remote-scripting
 ```
 
-#### 바로가기 만들기 (권장):
-1. Substance Painter 바로가기 복사
-2. 속성 → 대상에 `--enable-remote-scripting` 추가
-3. 예: `"...\Adobe Substance 3D Painter.exe" --enable-remote-scripting`
+바로가기의 **대상** 예시:
 
-### 4. Claude Desktop 설정
+```text
+"C:\Program Files\Adobe\Adobe Substance 3D Painter\Adobe Substance 3D Painter.exe" --enable-remote-scripting
+```
 
-`%APPDATA%\Claude\claude_desktop_config.json` 파일에 추가:
+이미 옵션 없이 실행된 Painter가 있으면 바로가기를 눌러도 기존 창만 활성화될 수 있습니다.
+Painter를 완전히 종료한 다음 이 바로가기로 다시 실행하세요. 포트는 별도 설정 없이 자동으로
+`localhost:60041`에 열립니다.
+
+확인 명령:
+
+```powershell
+Get-NetTCPConnection -LocalPort 60041
+```
+
+## MCP 클라이언트 설정
+
+Claude Desktop 예시:
 
 ```json
 {
   "mcpServers": {
     "substance-painter": {
-      "command": "python",
-      "args": ["C:\\path\\to\\SubstancePainterMCP\\src\\server.py"],
-      "cwd": "C:\\path\\to\\SubstancePainterMCP\\src"
+      "command": "E:\\SubstanceMCP\\SubstacePainterMCP\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "substance_painter_mcp"],
+      "env": {
+        "SP_MCP_TIMEOUT": "120",
+        "SP_MCP_EXPORT_ROOTS": "E:\\SubstanceExports"
+      }
     }
   }
 }
 ```
 
-> ⚠️ 경로를 본인 환경에 맞게 수정하세요!
+경로는 실제 설치 위치에 맞게 바꾸세요. 설치 후 생성되는
+`.venv\Scripts\substance-painter-mcp.exe`를 `command`로 직접 지정해도 됩니다.
 
-### 5. Claude Desktop 재시작
+## 환경 변수
 
-설정 후 Claude Desktop을 완전히 종료했다가 다시 실행하세요.
+| 변수 | 기본값 | 설명 |
+|---|---:|---|
+| `SP_MCP_HOST` | `localhost` | Painter remote host |
+| `SP_MCP_PORT` | `60041` | Painter remote port |
+| `SP_MCP_TIMEOUT` | `30` | HTTP timeout(초) |
+| `SP_MCP_ALLOW_EXECUTE_PYTHON` | 미설정 | `1`일 때만 raw Python 허용 |
+| `SP_MCP_EXPORT_ROOTS` | 미설정 | 내보내기를 허용할 루트. Windows에서는 `;`로 복수 지정 |
 
-## 사용법
+`plan_texture_export`는 파일을 만들지 않고 정확한 출력 목록과 기존 파일 충돌을 반환합니다.
+`export_textures`는 plan을 다시 검증하며, 기존 파일이 있으면 `overwrite=true` 없이는 중단합니다.
 
-### 기본 도구들
+## 안전 설계
 
-Claude에게 다음과 같이 요청할 수 있습니다:
+- 이름·색상·UID 등은 Python 코드 문자열에 직접 삽입하지 않고 base64 JSON으로 전달합니다.
+- 고정 `C:\temp` 결과 파일을 사용하지 않아 동시 요청과 오래된 결과 충돌을 피합니다.
+- 연결 실패 시 1시간 대기하지 않고 설정된 짧은 timeout으로 종료합니다.
+- 원격 오류는 연결/HTTP/스크립트 오류로 구분합니다.
+- raw Python은 opt-in입니다.
 
-- `"Painter 연결 확인해줘"` - 연결 상태 체크
-- `"프로젝트 정보 알려줘"` - 텍스처셋 목록 등
-- `"레이어 구조 보여줘"` - 전체 레이어 구조
-- `"Fill Layer 만들어줘"` - 새 레이어 생성
+## 테스트
 
-### 고급 사용 (execute_python)
-
-`execute_python` 도구로 Painter Python API를 직접 실행할 수 있습니다:
-
-```python
-# 예: 모든 텍스처셋에 Fill Layer 생성
-import substance_painter.layerstack as ls
-import substance_painter.textureset as ts
-
-for tex_set in ts.all_texture_sets():
-    stack = tex_set.get_stack()
-    pos = ls.InsertPosition.from_textureset_stack(stack)
-    layer = ls.insert_fill(pos)
-    layer.set_name("My_Layer")
+```powershell
+.venv\Scripts\python.exe -m pytest
 ```
 
-### 실제 워크플로우 예시
+현재 자동 테스트는 연결 인코딩, 오류 타입, timeout 실패, 입력 격리, 색상/opacity 검증을 다룹니다.
+Painter 라이브 테스트에서는 조회 → 생성 → 색상/속성/선택 → 삭제 왕복을 사용합니다.
 
-```
-"모든 텍스처셋에 Hair_Base 레이어 만들고 베이지색으로 설정해줘"
+```powershell
+# 읽기 전용
+.venv\Scripts\python.exe scripts\live_smoke.py
 
-"Hair_Gradient 레이어에 Position Generator 마스크 추가해줘"
-
-"LightSetup 레이어 Multiply 85%로 설정해줘"
-```
-
-## 파일 구조
-
-```
-SubstancePainterMCP/
-├── src/
-│   ├── server.py          # MCP 서버 메인
-│   ├── painter_remote.py  # Painter HTTP 통신 모듈
-│   └── test_project.py    # 테스트용 스크립트
-├── pyproject.toml
-└── README.md
+# 임시 레이어 생성 후 항상 정리하는 변경 왕복
+.venv\Scripts\python.exe scripts\live_smoke.py --write
 ```
 
-## 문제 해결
+## 다음 기능
 
-### "연결 안됨" 오류
-
-1. Painter가 `--enable-remote-scripting` 옵션으로 실행됐는지 확인
-2. 포트 60041이 사용 가능한지 확인
-3. 방화벽 설정 확인
-
-### "MCP 모듈 없음" 오류
-
-```bash
-pip install mcp
-```
-
-### Claude에서 도구가 안 보임
-
-1. `claude_desktop_config.json` 경로/문법 확인
-2. Claude Desktop 완전 재시작 (트레이 아이콘까지 종료)
-
-## 참고 자료
-
-- [Substance Painter Python API](https://substance3d.adobe.com/documentation/ptpy)
-- [Remote Scripting 문서](https://substance3d.adobe.com/documentation/ptpy/plugins/remote-scripting)
-- [MCP Protocol](https://modelcontextprotocol.io/)
+구현 순서와 안전 게이트는 [docs/ROADMAP.md](docs/ROADMAP.md)에 정리되어 있습니다.
 
 ## 라이선스
 
-MIT License
+MIT
