@@ -21,7 +21,7 @@ Claude가 Substance Painter를 제어할 수 있게 해주는 MCP(Model Context 
 ### 1. 저장소 클론
 
 ```bash
-git clone https://github.com/elliezu/SubstacePainterMCP.git
+git clone https://github.com/elliezu/SubstancePainterMCP.git
 cd SubstancePainterMCP
 ```
 
@@ -60,8 +60,8 @@ Painter를 **Remote Scripting 활성화** 상태로 실행해야 합니다.
   "mcpServers": {
     "substance-painter": {
       "command": "python",
-      "args": ["E:\\SubstanceMCP\\SubstacePainterMCP\\src\\server.py"],
-      "cwd": "E:\\SubstanceMCP\\SubstacePainterMCP\\src"
+      "args": ["C:\\path\\to\\SubstancePainterMCP\\src\\server.py"],
+      "cwd": "C:\\path\\to\\SubstancePainterMCP\\src"
     }
   }
 }
