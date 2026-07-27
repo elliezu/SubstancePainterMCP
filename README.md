@@ -1,51 +1,81 @@
 # Substance Painter MCP
 
-MCP 클라이언트가 로컬 Adobe Substance 3D Painter를 조회하고 레이어를 편집할 수 있게 해주는 서버입니다.
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![MCP SDK 1.x](https://img.shields.io/badge/MCP_SDK-1.x-5A67D8)](https://github.com/modelcontextprotocol/python-sdk)
+[![Tested with Painter 12.1.1](https://img.shields.io/badge/Painter-12.1.1-99E83F)](https://www.adobe.com/products/substance3d/apps/painter.html)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 현재 상태
+An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-- 버전: **0.2.0**
-- 라이브 검증: **Substance 3D Painter 12.1.1 / Python API 0.3.5**
-- MCP SDK: 안정판 **1.x** (`mcp>=1.28,<2`)
-- 전송: MCP stdio → Painter HTTP remote scripting (`localhost:60041`)
-- 지원 Python: 3.10+
+Version **0.2.0** is a major modernization of the original proof of concept. It provides 22 focused MCP tools, an installable Python package, bounded connection timeouts, capability-based compatibility, UID-safe layer editing, guarded texture exports, automated tests, and live validation against **Substance 3D Painter 12.1.1**.
 
-Painter가 보고하는 Python API 버전과 실제 capability가 어긋날 수 있어서, 버전 문자열 대신
-`get_capabilities`로 런타임 기능을 탐지합니다.
+> This is an independent community project and is not affiliated with or endorsed by Adobe.
 
-## 도구
+## Highlights
 
-### 조회
+- Inspect the open project, Texture Sets, channels, resources, export presets, and complete layer tree.
+- Create and edit Fill, Paint, and Group layers through stable layer UIDs.
+- Set OpenPBR-aware Fill channels, masks, visibility, opacity, blend modes, names, and selection.
+- Audit project structure and search layers or resources without mutating the project.
+- Preview exact export paths before writing and restrict exports to explicitly allowed directories.
+- Detect runtime capabilities instead of trusting Painter's reported Python API version alone.
+- Keep arbitrary Python execution disabled unless the user explicitly opts in.
 
-- `painter_status`: 연결, Painter/API 버전, 프로젝트 상태
-- `get_project_info`: 프로젝트 경로와 Texture Set
-- `get_capabilities`: 채널, 블렌딩 모드, 버전별 기능
-- `audit_project`: 해상도/채널/레이어 위생/outdated resource 감사
-- `list_layers`: UID 기반 재귀 레이어 트리
-- `find_layers`: 이름/타입/가시성 기반 검색과 부모 경로
-- `list_export_presets`: 내장/선반 내보내기 프리셋
-- `plan_texture_export`: 파일을 쓰기 전 정확한 출력 목록/충돌 검증
-- `export_textures`: 허용 루트 안에 내보내고 생성 파일/크기 검증
-- `list_project_resources`: 프로젝트가 참조하는 리소스
-- `search_resources`: 리소스 타입/usage/URL 검색
+## Compatibility
 
-### 편집
+| Component | Supported / validated |
+|---|---|
+| Adobe Substance 3D Painter | Live-tested with 12.1.1 |
+| Painter Python API | Runtime reported 0.3.5 in the validated build |
+| Python | 3.10 or newer |
+| MCP Python SDK | `mcp>=1.28,<2` |
+| Transport | MCP stdio to Painter HTTP remote scripting |
+| Painter endpoint | `localhost:60041` by default |
 
-- `create_fill_layer`, `create_paint_layer`, `create_group`
-- `set_fill_base_color`: sRGB 입력을 Painter 작업 색공간으로 변환
-- `set_fill_channels`: Roughness/Metallic/Emission 등 다중 uniform 채널
-- `set_layer_mask`: White/Black 마스크 추가·변경·제거
-- `set_layer_properties`: 가시성, 채널별 opacity/blend mode
-- `rename_layer`, `select_layers`, `delete_layer`
+Painter builds may expose newer features while reporting an older API version string. `get_capabilities` therefore probes the running application for supported channels, blend modes, OpenPBR behavior, and version-specific features.
 
-레이어 이름은 중복될 수 있으므로 편집 도구는 `list_layers`가 반환한 UID를 사용합니다.
+## Available tools
 
-### 고급
+### Inspection and diagnostics
 
-- `execute_python`: 임의 Painter Python 실행. 기본 비활성화이며 명시적으로
-  `SP_MCP_ALLOW_EXECUTE_PYTHON=1`을 설정해야 합니다.
+| Tool | Purpose |
+|---|---|
+| `painter_status` | Check the connection, Painter/API versions, and whether a project is open. |
+| `get_project_info` | Return the project path and Texture Sets. |
+| `get_capabilities` | Probe channels, blend modes, and version-dependent runtime features. |
+| `audit_project` | Report resolution, channels, layer hygiene, and outdated resources. |
+| `list_layers` | Return a recursive UID-based layer tree. |
+| `find_layers` | Search by name, type, or visibility and include parent paths. |
+| `list_export_presets` | List built-in and shelf export presets. |
+| `list_project_resources` | List resources referenced by the current project. |
+| `search_resources` | Search resources by query, usage, URL, or type. |
 
-## 설치
+### Layer editing
+
+| Tool | Purpose |
+|---|---|
+| `create_fill_layer` | Create a Fill layer with an optional base color. |
+| `create_paint_layer` | Create a Paint layer. |
+| `create_group` | Create a layer group. |
+| `set_fill_base_color` | Convert an sRGB input color into Painter's working color space. |
+| `set_fill_channels` | Set multiple uniform channels, including Roughness, Metallic, and Emission aliases. |
+| `set_layer_mask` | Add, replace, or remove a White/Black mask. |
+| `set_layer_properties` | Set visibility and channel-specific opacity or blend mode. |
+| `rename_layer` | Rename a layer by UID. |
+| `select_layers` | Select one or more layers by UID. |
+| `delete_layer` | Delete a layer by UID. |
+
+Layer names are not unique in Painter. All mutation tools therefore use the UIDs returned by `list_layers` or `find_layers`.
+
+### Export and advanced access
+
+| Tool | Purpose |
+|---|---|
+| `plan_texture_export` | Resolve expected output files and conflicts without writing anything. |
+| `export_textures` | Export within approved roots and verify every generated file and size. |
+| `execute_python` | Run arbitrary Painter Python only when explicitly enabled. |
+
+## Installation
 
 ```powershell
 git clone https://github.com/elliezu/SubstancePainterMCP.git
@@ -54,101 +84,107 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 ```
 
-개발/테스트 의존성까지 설치하려면:
+For development and tests:
 
 ```powershell
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 .venv\Scripts\python.exe -m pytest
 ```
 
-## Painter 실행
+## Start Painter with remote scripting
 
-Painter는 반드시 새 프로세스로 다음 옵션과 함께 실행해야 합니다.
+Painter must be started as a new process with remote scripting enabled:
 
 ```powershell
 "C:\Program Files\Adobe\Adobe Substance 3D Painter\Adobe Substance 3D Painter.exe" --enable-remote-scripting
 ```
 
-바로가기의 **대상** 예시:
+You can add the same argument to a Windows shortcut's **Target** field:
 
 ```text
 "C:\Program Files\Adobe\Adobe Substance 3D Painter\Adobe Substance 3D Painter.exe" --enable-remote-scripting
 ```
 
-이미 옵션 없이 실행된 Painter가 있으면 바로가기를 눌러도 기존 창만 활성화될 수 있습니다.
-Painter를 완전히 종료한 다음 이 바로가기로 다시 실행하세요. 포트는 별도 설정 없이 자동으로
-`localhost:60041`에 열립니다.
+If Painter is already running without this argument, launching the shortcut may only focus the existing process. Exit Painter completely, then start it again from the modified shortcut. No manual port configuration is needed: Painter opens `localhost:60041` automatically.
 
-확인 명령:
+Verify the listener in PowerShell:
 
 ```powershell
 Get-NetTCPConnection -LocalPort 60041
 ```
 
-## MCP 클라이언트 설정
+## Configure an MCP client
 
-Claude Desktop 예시:
+Example for Claude Desktop on Windows:
 
 ```json
 {
   "mcpServers": {
     "substance-painter": {
-      "command": "E:\\SubstanceMCP\\SubstacePainterMCP\\.venv\\Scripts\\python.exe",
+      "command": "C:\\Tools\\SubstancePainterMCP\\.venv\\Scripts\\python.exe",
       "args": ["-m", "substance_painter_mcp"],
       "env": {
         "SP_MCP_TIMEOUT": "120",
-        "SP_MCP_EXPORT_ROOTS": "E:\\SubstanceExports"
+        "SP_MCP_EXPORT_ROOTS": "D:\\SubstanceExports"
       }
     }
   }
 }
 ```
 
-경로는 실제 설치 위치에 맞게 바꾸세요. 설치 후 생성되는
-`.venv\Scripts\substance-painter-mcp.exe`를 `command`로 직접 지정해도 됩니다.
+Replace the paths with your installation and export directories. You may also use `.venv\Scripts\substance-painter-mcp.exe` directly as the command.
 
-## 환경 변수
+## Environment variables
 
-| 변수 | 기본값 | 설명 |
+| Variable | Default | Description |
 |---|---:|---|
-| `SP_MCP_HOST` | `localhost` | Painter remote host |
-| `SP_MCP_PORT` | `60041` | Painter remote port |
-| `SP_MCP_TIMEOUT` | `30` | HTTP timeout(초) |
-| `SP_MCP_ALLOW_EXECUTE_PYTHON` | 미설정 | `1`일 때만 raw Python 허용 |
-| `SP_MCP_EXPORT_ROOTS` | 미설정 | 내보내기를 허용할 루트. Windows에서는 `;`로 복수 지정 |
+| `SP_MCP_HOST` | `localhost` | Painter remote-scripting host. |
+| `SP_MCP_PORT` | `60041` | Painter remote-scripting port. |
+| `SP_MCP_TIMEOUT` | `30` | HTTP timeout in seconds. |
+| `SP_MCP_ALLOW_EXECUTE_PYTHON` | unset | Set to `1` to expose arbitrary Python execution. |
+| `SP_MCP_EXPORT_ROOTS` | unset | Approved export roots. Separate multiple Windows paths with `;`. |
 
-`plan_texture_export`는 파일을 만들지 않고 정확한 출력 목록과 기존 파일 충돌을 반환합니다.
-`export_textures`는 plan을 다시 검증하며, 기존 파일이 있으면 `overwrite=true` 없이는 중단합니다.
+Exports are disabled until `SP_MCP_EXPORT_ROOTS` is configured. `plan_texture_export` performs a read-only preflight. `export_textures` repeats the validation and refuses existing targets unless `overwrite=true` is explicitly supplied.
 
-## 안전 설계
+## Safety model
 
-- 이름·색상·UID 등은 Python 코드 문자열에 직접 삽입하지 않고 base64 JSON으로 전달합니다.
-- 고정 `C:\temp` 결과 파일을 사용하지 않아 동시 요청과 오래된 결과 충돌을 피합니다.
-- 연결 실패 시 1시간 대기하지 않고 설정된 짧은 timeout으로 종료합니다.
-- 원격 오류는 연결/HTTP/스크립트 오류로 구분합니다.
-- raw Python은 opt-in입니다.
+- User values such as names, colors, and UIDs are serialized as base64-encoded JSON instead of being interpolated into Python source.
+- Results are returned directly; the server no longer relies on a shared `C:\temp` result file that could become stale or collide across requests.
+- Failed connections stop at the configured timeout instead of hanging for an hour.
+- Connection, HTTP, and Painter script failures are reported as distinct error types.
+- Layer mutations use UIDs to avoid editing the wrong layer when names are duplicated.
+- Texture exports require approved roots, a preflight plan, explicit overwrite consent, and post-export file verification.
+- Arbitrary Python is opt-in and disabled by default.
 
-## 테스트
+The server is designed for local use. Do not expose Painter's remote-scripting port to untrusted networks.
+
+## Testing and live validation
+
+Run the automated suite:
 
 ```powershell
 .venv\Scripts\python.exe -m pytest
 ```
 
-현재 자동 테스트는 연결 인코딩, 오류 타입, timeout 실패, 입력 격리, 색상/opacity 검증을 다룹니다.
-Painter 라이브 테스트에서는 조회 → 생성 → 색상/속성/선택 → 삭제 왕복을 사용합니다.
+The current suite covers request encoding, typed errors, timeout behavior, input isolation, color conversion, opacity validation, and operation-level behavior.
+
+With Painter running and a disposable project open, use the live smoke test:
 
 ```powershell
-# 읽기 전용
+# Read-only inspection
 .venv\Scripts\python.exe scripts\live_smoke.py
 
-# 임시 레이어 생성 후 항상 정리하는 변경 왕복
+# Reversible create -> edit -> verify -> delete round trip
 .venv\Scripts\python.exe scripts\live_smoke.py --write
 ```
 
-## 다음 기능
+The 0.2.0 validation run used Painter 12.1.1 and a sample project. It verified registration of all 22 MCP tools, then live-exercised connection and project inspection, reversible Group/Fill/Paint creation, OpenPBR channel aliases, White/Black masks, opacity and blend modes, multi-layer selection, project auditing, a 1,845-resource shelf search, preset discovery, and a guarded 256 px PNG texture export with output-file verification. Temporary layers and export artifacts were removed after validation.
 
-구현 순서와 안전 게이트는 [docs/ROADMAP.md](docs/ROADMAP.md)에 정리되어 있습니다.
+## Roadmap and release notes
 
-## 라이선스
+- See [CHANGELOG.md](CHANGELOG.md) for the detailed 0.2.0 modernization notes.
+- See [docs/ROADMAP.md](docs/ROADMAP.md) for planned layer recipes, snapshots, backups, engine-specific export profiles, async baking, and Blender round-trip workflows.
 
-MIT
+## License
+
+MIT. See [LICENSE](LICENSE).
