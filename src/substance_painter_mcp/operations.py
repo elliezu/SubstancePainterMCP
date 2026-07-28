@@ -566,6 +566,7 @@ result = {
     def capabilities(self) -> dict[str, Any]:
         code = '''
 import substance_painter.baking as baking
+import substance_painter.event as event
 import substance_painter.export as export
 import substance_painter.layerstack as layerstack
 import substance_painter.project as project
@@ -610,6 +611,12 @@ result = {
         "project_open": hasattr(project, "open"),
         "current_project_save": hasattr(project, "save"),
         "typed_mesh_import_settings": hasattr(project, "AutoUnwrapSettings"),
+        "shelf_import": hasattr(resource.Shelf, "import_resource"),
+        "shelf_refresh_events": all((
+            hasattr(resource.Shelf, "refresh"),
+            hasattr(event, "ShelfCrawlingStarted"),
+            hasattr(event, "ShelfCrawlingEnded"),
+        )),
     },
 }
 '''
@@ -3910,6 +3917,194 @@ result = {
         confirm: bool = False,
     ) -> dict[str, Any]:
         return self._import_resource(file_path, usage, name, group, "project", confirm)
+
+    def list_shelves(self) -> dict[str, Any]:
+        code = '''
+import substance_painter.resource as resource
+shelves = resource.Shelves.all()
+result = {
+    "count": len(shelves),
+    "user_shelf": resource.Shelves.user_shelf().name(),
+    "application_shelf": resource.Shelves.application_shelf().name(),
+    "shelves": [
+        {
+            "name": shelf.name(),
+            "path": shelf.path(),
+            "can_import": shelf.can_import_resources(),
+            "crawling": shelf.is_crawling(),
+        }
+        for shelf in shelves
+    ],
+}
+'''
+        return _unwrap(self.remote.execute_python_json(code))
+
+    def import_shelf_resource(
+        self,
+        file_path: str,
+        usage: str,
+        shelf_name: str | None = None,
+        name: str | None = None,
+        group: str | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError("Shelf resource import requires confirm=true")
+        normalized_usage = usage.strip().upper()
+        if normalized_usage not in SAFE_RESOURCE_IMPORT_USAGES:
+            allowed = ", ".join(sorted(SAFE_RESOURCE_IMPORT_USAGES))
+            raise ValueError(f"usage must be one of the safe import usages: {allowed}")
+        if shelf_name is not None and not shelf_name.strip():
+            raise ValueError("shelf_name must be non-empty when supplied")
+        for label, value in (("name", name), ("group", group)):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{label} must be a non-empty string when supplied")
+        input_path = self._validate_resource_import_path(file_path)
+        code = '''
+import substance_painter.resource as resource
+if params.get("shelf_name"):
+    if not resource.Shelves.exists(params["shelf_name"]):
+        raise ValueError(f"Unknown shelf: {params['shelf_name']}")
+    shelf = resource.Shelf(params["shelf_name"])
+else:
+    shelf = resource.Shelves.user_shelf()
+if not shelf.can_import_resources():
+    raise PermissionError(f"Shelf is read-only: {shelf.name()}")
+item = shelf.import_resource(
+    params["file_path"],
+    resource.Usage.__members__[params["usage"]],
+    params.get("name"),
+    params.get("group"),
+)
+identifier = item.identifier()
+retrieved = resource.Resource.retrieve(identifier)
+result = {
+    "shelf": shelf.name(),
+    "shelf_path": shelf.path(),
+    "source_path": params["file_path"],
+    "url": identifier.url(),
+    "name": identifier.name,
+    "context": identifier.context,
+    "version": identifier.version,
+    "location": item.location().name,
+    "type": item.type().name,
+    "category": item.category(),
+    "usages": [value.name for value in item.usages()],
+    "verified": any(candidate.identifier() == identifier for candidate in retrieved),
+}
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "file_path": input_path.as_posix(),
+                    "usage": normalized_usage,
+                    "shelf_name": shelf_name,
+                    "name": name,
+                    "group": group,
+                },
+            )
+        )
+        if not result.get("verified") or result.get("location") != "SHELF":
+            raise IOError(f"Painter shelf import could not be verified: {input_path}")
+        return result
+
+    def start_shelf_refresh(
+        self, shelf_name: str, confirm: bool = False
+    ) -> dict[str, Any]:
+        if not shelf_name.strip():
+            raise ValueError("shelf_name must be a non-empty name")
+        if not confirm:
+            raise PermissionError("Shelf refresh changes the resource index; set confirm=true")
+        code = '''
+import builtins
+import time
+import uuid
+import substance_painter.event as event
+import substance_painter.resource as resource
+
+previous = getattr(builtins, "_sp_mcp_shelf_refresh_state", None)
+if previous and previous.get("status") in {"starting", "running"}:
+    raise RuntimeError(
+        f"Shelf refresh job is already running: {previous['job_id']} "
+        f"({previous['shelf']})"
+    )
+if not resource.Shelves.exists(params["shelf_name"]):
+    raise ValueError(f"Unknown shelf: {params['shelf_name']}")
+shelf = resource.Shelf(params["shelf_name"])
+if shelf.is_crawling():
+    raise RuntimeError(f"Shelf is already crawling: {params['shelf_name']}")
+job_id = uuid.uuid4().hex
+state = {
+    "job_id": job_id,
+    "operation": "shelf_refresh",
+    "shelf": params["shelf_name"],
+    "status": "starting",
+    "started_at": time.time(),
+    "finished_at": None,
+    "crawling_started": False,
+    "error": None,
+}
+builtins._sp_mcp_shelf_refresh_state = state
+
+def disconnect():
+    refs = getattr(builtins, "_sp_mcp_shelf_refresh_refs", [])
+    for event_cls, callback in refs:
+        try:
+            event.DISPATCHER.disconnect(event_cls, callback)
+        except Exception:
+            pass
+
+def on_started(message):
+    if message.shelf_name == state["shelf"]:
+        state["crawling_started"] = True
+        state["status"] = "running"
+
+def on_ended(message):
+    if message.shelf_name == state["shelf"]:
+        state["status"] = "success"
+        state["finished_at"] = time.time()
+        disconnect()
+
+refs = [
+    (event.ShelfCrawlingStarted, on_started),
+    (event.ShelfCrawlingEnded, on_ended),
+]
+for event_cls, callback in refs:
+    event.DISPATCHER.connect_strong(event_cls, callback)
+builtins._sp_mcp_shelf_refresh_refs = refs
+try:
+    shelf.refresh()
+    if state["status"] == "starting":
+        state["status"] = "running"
+except Exception as exc:
+    disconnect()
+    state["status"] = "failed"
+    state["error"] = f"{type(exc).__name__}: {exc}"
+    state["finished_at"] = time.time()
+    raise
+result = dict(state)
+'''
+        return _unwrap(
+            self.remote.execute_python_json(code, {"shelf_name": shelf_name})
+        )
+
+    def get_shelf_refresh_job(self, job_id: str | None = None) -> dict[str, Any]:
+        code = '''
+import builtins
+import substance_painter.resource as resource
+state = getattr(builtins, "_sp_mcp_shelf_refresh_state", None)
+if state is None:
+    result = {"found": False, "job": None}
+elif params.get("job_id") and state["job_id"] != params["job_id"]:
+    result = {"found": False, "job": None}
+else:
+    shelf = resource.Shelf(state["shelf"])
+    result = {"found": True, "job": dict(state), "crawling": shelf.is_crawling()}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(code, {"job_id": job_id})
+        )
 
     def import_session_resource(
         self,

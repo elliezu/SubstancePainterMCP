@@ -700,6 +700,39 @@ def import_project_resource(
 
 
 @mcp.tool()
+def list_shelves() -> dict[str, Any]:
+    """List Painter shelves with paths, write capability, and crawling state."""
+    return operations.list_shelves()
+
+
+@mcp.tool()
+def import_shelf_resource(
+    file_path: str,
+    usage: str,
+    shelf_name: str | None = None,
+    name: str | None = None,
+    group: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Import and verify a safe resource in an editable shelf or the user shelf."""
+    return operations.import_shelf_resource(
+        file_path, usage, shelf_name, name, group, confirm
+    )
+
+
+@mcp.tool()
+def start_shelf_refresh(shelf_name: str, confirm: bool = False) -> dict[str, Any]:
+    """Start event-observed discovery for one Painter shelf after confirmation."""
+    return operations.start_shelf_refresh(shelf_name, confirm)
+
+
+@mcp.tool()
+def get_shelf_refresh_job(job_id: str | None = None) -> dict[str, Any]:
+    """Read persistent state for the latest or selected shelf refresh job."""
+    return operations.get_shelf_refresh_job(job_id)
+
+
+@mcp.tool()
 def import_session_resource(
     file_path: str,
     usage: str,

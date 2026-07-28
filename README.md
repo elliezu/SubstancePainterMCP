@@ -7,7 +7,7 @@
 
 An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-Version **0.9.0** provides 75 focused MCP tools. It adds planned, backed-up project creation; asynchronous creation state and file verification; safe project switching; explicit current-project saving; and typed Auto UV, USD, and glTF import settings. It remains live-validated against **Substance 3D Painter 12.1.1**.
+Version **1.0.0** provides 79 focused MCP tools. It completes the guarded resource workflow with shelf discovery, persistent shelf imports, and event-driven shelf refresh jobs, on top of the planned project lifecycle, production baking, and transactional layer authoring added throughout the 0.x releases. It is live-validated against **Substance 3D Painter 12.1.1**.
 
 > This is an independent community project and is not affiliated with or endorsed by Adobe.
 
@@ -22,7 +22,8 @@ Version **0.9.0** provides 75 focused MCP tools. It adds planned, backed-up proj
 - Insert Fill, Paint, Generator, Filter, Levels, Anchor, and Smart Mask effects into mask stacks.
 - Apply shelf Smart Materials/Masks and configure UV or Triplanar Fill transforms.
 - Assign shelf resources to individual Fill channels or complete materials.
-- Import safe visual resources from approved roots into the project or current Painter session.
+- Import safe visual resources from approved roots into the project, current Painter session, or a writable shelf.
+- Discover configured shelves and monitor explicit shelf-index refreshes through persistent event-backed jobs.
 - Inspect and edit typed procedural Substance parameters, including colors and enum labels.
 - Inspect, connect, reset, and transactionally restore procedural image inputs on Fill, Generator, and Filter sources.
 - Discover Anchor Points with owner context and connect them to Fill channels or materials.
@@ -62,6 +63,7 @@ Painter builds may expose newer features while reporting an older API version st
 | `get_project_info` | Return the project path and Texture Sets. |
 | `plan_project_creation` | Validate all new-project inputs, typed settings, output, backup, and current-context impact. |
 | `get_project_creation_job` | Poll asynchronous project creation, recovery state, and output-file verification. |
+| `get_shelf_refresh_job` | Poll the latest explicit shelf refresh and its crawling state. |
 | `get_capabilities` | Probe channels, blend modes, and version-dependent runtime features. |
 | `audit_project` | Report resolution, channels, layer hygiene, and outdated resources. |
 | `inspect_baking` | Inspect enabled bakers, UV tiles, and mesh-map assignments without baking. |
@@ -81,6 +83,7 @@ Painter builds may expose newer features while reporting an older API version st
 | `inspect_export_preset` | Resolve a preset and preview its exact map names without writing. |
 | `list_export_profiles` | List curated VRChat, Blender, Unity, Unreal, and generic profiles. |
 | `list_project_resources` | List resources referenced by the current project. |
+| `list_shelves` | List configured shelves, paths, write capability, and current crawling state. |
 | `search_resources` | Search resources by query, usage, URL, or type. |
 | `find_outdated_resources` | Build a read-only replacement plan for outdated project resources. |
 
@@ -134,6 +137,8 @@ Layer names are not unique in Painter. All mutation tools therefore use the UIDs
 | `replace_outdated_resources` | Apply Painter's atomic resource replacement after `confirm=true`. |
 | `import_project_resource` | Import and verify a safe visual resource inside the open project after `confirm=true`. |
 | `import_session_resource` | Import and verify a safe visual resource for the current Painter session after `confirm=true`. |
+| `import_shelf_resource` | Persist and verify a safe visual resource in a writable Painter shelf after `confirm=true`. |
+| `start_shelf_refresh` | Refresh one configured shelf and bridge Painter crawling events into a persistent job. |
 | `start_bake` | Start an asynchronous bake after `confirm=true`, optionally creating a project copy first. |
 | `cancel_bake` | Request cooperative cancellation of a running bake job. |
 | `configure_baking` | Transactionally configure Texture Set enablement, bakers, UDIMs, curvature, and typed properties after `confirm=true`. |
@@ -221,7 +226,7 @@ Replace the paths with your installation and export directories. You may also us
 | `SP_MCP_PROJECT_ROOTS` | unset | Approved roots for `.spp` project copies. |
 | `SP_MCP_MESH_ROOTS` | unset | Approved input roots for FBX, OBJ, DAE, PLY, and USD mesh reloads. |
 | `SP_MCP_BAKE_MESH_ROOTS` | unset | Approved roots for high-poly and cage meshes used by baking. |
-| `SP_MCP_RESOURCE_ROOTS` | unset | Approved input roots for project/session resource imports. |
+| `SP_MCP_RESOURCE_ROOTS` | unset | Approved input roots for project/session/shelf resource imports. |
 
 Exports are disabled until `SP_MCP_EXPORT_ROOTS` is configured. `plan_texture_export` performs a read-only preflight. `export_textures` repeats the validation and refuses existing targets unless `overwrite=true` is explicitly supplied.
 
@@ -231,7 +236,7 @@ Mesh reload and project creation are independently disabled until `SP_MCP_MESH_R
 
 High-poly and cage assignment is independently disabled until `SP_MCP_BAKE_MESH_ROOTS` is configured. `set_baking_mesh_inputs` accepts only existing mesh files below those roots. `preflight_bake` then validates the effective Painter settings before `start_batch_bake` changes any mesh maps.
 
-Resource import is independently disabled until `SP_MCP_RESOURCE_ROOTS` is configured. Project and session imports require `confirm=true`, reject executable/script-like extensions and unsafe script/shader usages, and verify the returned `resource://` identity through Painter before returning it.
+Resource import is independently disabled until `SP_MCP_RESOURCE_ROOTS` is configured. Project, session, and shelf imports require `confirm=true`, reject executable/script-like extensions and unsafe script/shader usages, and verify the returned `resource://` identity through Painter before returning it. Shelf imports additionally require a configured writable shelf; refresh jobs report Painter's actual crawling events instead of guessing from request completion.
 
 ## Safety model
 
@@ -247,6 +252,7 @@ Resource import is independently disabled until `SP_MCP_RESOURCE_ROOTS` is confi
 - Mesh inputs are restricted to approved roots and Painter-supported extensions.
 - Generic procedural/baker parameter setters reject file and resource widgets; filesystem-backed inputs require dedicated sandboxed tools instead of accepting arbitrary paths.
 - Resource imports use an independent approved-root policy, a safe usage allowlist, script/executable rejection, and post-import retrieval verification.
+- Shelf writes require explicit confirmation and a writable configured shelf; shelf refresh state is retained in Painter and driven by crawling events.
 - Procedural and baking resource setters accept only existing `resource://` identities and restore the original source/property if Painter rejects an update.
 - Baking configuration reports every linked Texture Set affected by shared common or per-baker parameters and rolls the touched state back if any update fails.
 - Batch baking restores every Texture Set's original bake-enabled state after success, cancellation, launch failure, or Painter failure.
@@ -306,9 +312,16 @@ $env:SP_MCP_PROJECT_ROOTS = "D:\SubstanceProjects"
 .venv\Scripts\python.exe scripts\live_v09.py `
   --output D:\SubstanceProjects\mcp_created.spp `
   --backup D:\SubstanceProjects\before_creation.spp
+
+# v1.0 persistent shelf import, crawl events, ResourceID verification, and cleanup
+$env:SP_MCP_RESOURCE_ROOTS = "D:\SubstanceResources"
+.venv\Scripts\python.exe scripts\live_v10.py `
+  --source D:\SubstanceResources\validation.png `
+  --shelf-path D:\SubstanceResources\mcp-validation-shelf `
+  --shelf-name mcp-validation
 ```
 
-The 0.9.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 75 FastMCP schemas and 61 automated tests; saved the current 955 MB project; created and verified a 21 MB 256px OpenGL project through a `ProjectEditionEntered` job; verified the backup and explicit Full save; reopened the exact original `.spp`; reloaded the same FBX using typed Auto UV settings while preserving strokes; observed zero added or removed Texture Sets; and verified the final original-project save. The generated project and backup were deleted after successful restoration.
+The 1.0.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 79 FastMCP schemas and 64 automated tests. The lifecycle validation saved the current 955 MB project; created and verified a 21 MB 256px OpenGL project through a `ProjectEditionEntered` job; verified the backup and explicit Full save; reopened the exact original `.spp`; reloaded the same FBX using typed Auto UV settings while preserving strokes; and observed zero added or removed Texture Sets. The shelf validation then created a disposable writable shelf, imported a PNG as a versioned `SHELF` resource, observed real `ShelfCrawlingStarted` and `ShelfCrawlingEnded` events, re-retrieved the exact ResourceID after refresh, removed the shelf, and restored the original project. All generated project, backup, and shelf artifacts were removed after successful restoration.
 
 ## Roadmap and release notes
 

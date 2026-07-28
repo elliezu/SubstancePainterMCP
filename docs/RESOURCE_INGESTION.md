@@ -1,6 +1,6 @@
 # Resource Ingestion and Procedural Inputs
 
-Version 0.8 provides a guarded path from an approved local file to a verified Painter ResourceID, then into Fill, Generator, Filter, or baking inputs.
+Version 1.0 provides a guarded path from an approved local file to a verified Painter ResourceID in project, session, or persistent shelf scope, then into Fill, Generator, Filter, or baking inputs.
 
 ## Approved roots and safe content
 
@@ -14,7 +14,7 @@ Configure one or more input roots in the MCP server environment:
 }
 ```
 
-Both import tools require `confirm=true`, an existing regular file below one of those roots, and a safe usage. Supported usages are `ALPHA`, `BASE_MATERIAL`, `BRUSH`, `COLOR_LUT`, `ENVIRONMENT`, `EXPORT`, `FILTER`, `FONT`, `GENERATOR`, `PROCEDURAL`, `SMART_MASK`, `SMART_MATERIAL`, and `TEXTURE`.
+All import tools require `confirm=true`, an existing regular file below one of those roots, and a safe usage. Supported usages are `ALPHA`, `BASE_MATERIAL`, `BRUSH`, `COLOR_LUT`, `ENVIRONMENT`, `EXPORT`, `FILTER`, `FONT`, `GENERATOR`, `PROCEDURAL`, `SMART_MASK`, `SMART_MATERIAL`, and `TEXTURE`.
 
 Shader, particle script, emitter/receiver, and other executable-oriented usages are not accepted. Common executable and script-like extensions are rejected even when placed under an approved root. Painter still performs final format/usage compatibility validation.
 
@@ -37,6 +37,25 @@ Use `import_session_resource` for temporary resources that should disappear when
 Both tools return a versioned `resource://` URL, Painter context/location/type, category, usages, and `verified`. The server re-retrieves the exact returned ResourceID before reporting success.
 
 Project imports are persistent mutations. Painter's public API does not expose a general-purpose safe delete for an arbitrary embedded project resource, so use session scope for disposable experiments.
+
+## Persistent shelf resources
+
+Use `list_shelves` to inspect every configured shelf, its path, whether it accepts imports, and whether Painter is currently crawling it. `import_shelf_resource` uses the same approved-root, safe-usage, confirmation, and exact-ResourceID verification rules as project/session imports. Omit `shelf_name` to target Painter's user shelf, or supply a name returned by `list_shelves`:
+
+```json
+{
+  "file_path": "D:\\SubstanceResources\\fabric_mask.png",
+  "usage": "TEXTURE",
+  "shelf_name": "studio-library",
+  "name": "Fabric Mask",
+  "group": "Studio Imports",
+  "confirm": true
+}
+```
+
+Unlike session imports, shelf imports remain on disk and can be reused by later projects and Painter sessions. The server refuses read-only shelves and reports the shelf name/path, exact versioned URL, Painter type, usages, and verification result.
+
+Call `start_shelf_refresh(shelf_name, confirm=true)` after files are changed outside Painter. The operation attaches strong handlers before requesting refresh and returns a persistent job ID. Poll `get_shelf_refresh_job(job_id)` for `starting`, `running`, `success`, or `failed`; success is set only after Painter emits `ShelfCrawlingEnded`. Starting a second refresh while that shelf is already crawling is rejected.
 
 ## Procedural image inputs
 

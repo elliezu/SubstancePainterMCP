@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0-0.9.0
+### Completed in 0.2.0-1.0.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -48,6 +48,7 @@ These features can be created, verified, and cleaned up in a sample project with
 - Procedural image-input wiring and Resource-typed baking inputs.
 - Planned, backed-up asynchronous project creation and safe project switching.
 - Typed Auto UV, USD, and glTF project/mesh-reload settings.
+- Writable-shelf discovery, sandboxed persistent imports, and event-driven refresh jobs.
 
 ### Layer structure and recipes
 
@@ -89,7 +90,7 @@ These operations require approved output locations and result verification, but 
 
 - Completed: export a selected group or mask as verified `.spsm` / `.spmsk` files.
 - Completed in 0.4.0: apply shelf Smart Materials and Smart Masks transactionally.
-- Next: confirm that Painter can rediscover a generated file in a configured shelf.
+- Completed in 1.0.0: list writable/read-only shelves, import verified resources persistently, and confirm rediscovery through `ShelfCrawlingStarted` / `ShelfCrawlingEnded` refresh jobs.
 
 ### Fill sources and projections
 

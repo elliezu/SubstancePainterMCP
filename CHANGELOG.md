@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.0.0 - 2026-07-28
+
+Version 1.0.0 expands the server from 75 to 79 tools and completes the public Painter resource-ingestion workflow with persistent shelf support and observable indexing.
+
+### Shelf discovery and persistent imports
+
+- Added `list_shelves` with shelf name, filesystem path, import capability, and live crawling state, plus the active user/application shelf identities.
+- Added `import_shelf_resource` for approved local files, defaulting to Painter's user shelf or targeting an explicitly named configured shelf.
+- Reused the independent `SP_MCP_RESOURCE_ROOTS` sandbox, safe visual/content usage allowlist, script/executable rejection, JSON parameter transport, and explicit `confirm=true` boundary.
+- Rejected unknown and read-only shelves before mutation.
+- Returned the exact versioned `resource://` URL, shelf context/path, location, type, category, usages, and source path.
+- Re-retrieved the returned ResourceID and required Painter to report `SHELF` location before accepting the import.
+
+### Event-driven shelf indexing
+
+- Added `start_shelf_refresh` with explicit confirmation and protection against duplicate refreshes while a shelf is crawling.
+- Connected strong handlers for `ShelfCrawlingStarted` and `ShelfCrawlingEnded` before requesting refresh, avoiding request-return timing guesses.
+- Added persistent Painter-side job state with job ID, status, timestamps, observed-start flag, shelf name, and error.
+- Added `get_shelf_refresh_job` to poll terminal status and current crawling state across independent MCP requests.
+- Reported shelf import and refresh-event support through runtime capability probes.
+
+### Validation and release readiness
+
+- Expanded the automated suite from 61 to 64 tests and verified all 79 FastMCP schemas.
+- Live-tested a disposable writable shelf in Painter 12.1.1: imported a PNG as `TEXTURE`, verified its versioned shelf ResourceID, observed both crawling events, and re-retrieved the same identity after refresh.
+- Removed the temporary shelf and its generated files, then reopened and verified the original saved three-Texture-Set project.
+- Updated the English README, resource-ingestion guide, roadmap, live-validation script, package metadata, and release notes for the stable 1.0.0 boundary.
+
 ## 0.9.0 - 2026-07-28
 
 Version 0.9.0 expands the server from 70 to 75 tools and completes a guarded Painter project lifecycle with typed mesh-import settings.

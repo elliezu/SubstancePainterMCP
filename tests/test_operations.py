@@ -122,6 +122,61 @@ def test_project_and_session_resource_import_transport(tmp_path, monkeypatch):
         }
 
 
+def test_shelf_resource_import_requires_confirmation(tmp_path, monkeypatch):
+    source = tmp_path / "texture.png"
+    source.write_bytes(b"png")
+    monkeypatch.setenv("SP_MCP_RESOURCE_ROOTS", str(tmp_path))
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.import_shelf_resource(str(source), "TEXTURE", "studio")
+    with pytest.raises(ValueError, match="safe import usages"):
+        operations.import_shelf_resource(
+            str(source), "SHADER", "studio", confirm=True
+        )
+    assert operations.remote.calls == []
+
+
+def test_shelf_resource_import_transports_and_verifies(tmp_path, monkeypatch):
+    source = tmp_path / "texture.png"
+    source.write_bytes(b"png")
+    monkeypatch.setenv("SP_MCP_RESOURCE_ROOTS", str(tmp_path))
+    response = {
+        "success": True,
+        "data": {"verified": True, "location": "SHELF", "url": "resource://studio/item"},
+    }
+    remote = FakeRemote(response)
+    result = PainterOperations(remote).import_shelf_resource(
+        str(source), "texture", "studio", "Imported", "MCP", True
+    )
+    assert result["verified"] is True
+    assert remote.calls[0][1] == {
+        "file_path": source.resolve().as_posix(),
+        "usage": "TEXTURE",
+        "shelf_name": "studio",
+        "name": "Imported",
+        "group": "MCP",
+    }
+    bad_remote = FakeRemote({"success": True, "data": {"verified": True, "location": "SESSION"}})
+    with pytest.raises(IOError, match="could not be verified"):
+        PainterOperations(bad_remote).import_shelf_resource(
+            str(source), "TEXTURE", "studio", confirm=True
+        )
+
+
+def test_shelf_refresh_tools_validate_and_transport():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="non-empty"):
+        operations.start_shelf_refresh(" ", confirm=True)
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.start_shelf_refresh("studio")
+    assert operations.remote.calls == []
+    operations.list_shelves()
+    operations.start_shelf_refresh("studio", confirm=True)
+    operations.get_shelf_refresh_job("job")
+    assert operations.remote.calls[1][1] == {"shelf_name": "studio"}
+    assert operations.remote.calls[2][1] == {"job_id": "job"}
+
+
 def test_active_channels_rejects_empty_or_duplicate_values():
     operations = PainterOperations(FakeRemote())
     with pytest.raises(ValueError, match="at least one"):
