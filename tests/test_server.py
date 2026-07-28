@@ -6,7 +6,7 @@ from substance_painter_mcp.server import mcp
 def test_all_tools_register_with_fastmcp():
     tools = asyncio.run(mcp.list_tools())
     names = {tool.name for tool in tools}
-    assert len(tools) == 53
+    assert len(tools) == 60
     assert {
         "create_layer_recipe",
         "snapshot_layer_tree",
@@ -33,4 +33,11 @@ def test_all_tools_register_with_fastmcp():
         "plan_mesh_reload",
         "start_mesh_reload",
         "get_mesh_reload_job",
+        "get_fill_parameters",
+        "set_fill_parameters",
+        "apply_fill_preset",
+        "list_anchor_points",
+        "set_fill_anchor_source",
+        "inspect_baking_parameters",
+        "configure_baking",
     } <= names

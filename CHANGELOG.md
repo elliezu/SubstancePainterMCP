@@ -2,6 +2,42 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.6.0 - 2026-07-28
+
+Version 0.6.0 expands the server from 53 to 60 tools and adds typed procedural authoring, Anchor Point source graphs, and transactional baker configuration.
+
+### Procedural Substance authoring
+
+- Added `get_fill_parameters` for procedural values, labels, widget types, ranges, enum labels, metadata, and available presets.
+- Added `set_fill_parameters` with JSON-safe scalar/vector inputs, sRGB color conversion, enum-label resolution, numeric range validation, finite-number checks, and rollback of every touched parameter if Painter rejects an update.
+- Added `apply_fill_preset` with source capability checks, exact preset-name validation, and parameter rollback on failure.
+- Supported material-mode and per-channel procedural sources with OpenPBR channel aliases.
+- Rejected generic `File`, `FileList`, and `Resource` widget edits so filesystem paths cannot bypass approved-root controls.
+
+### Anchor Point bindings
+
+- Added `list_anchor_points` across one or all Texture Sets with stack, owner layer, and mask/content context.
+- Added `set_fill_anchor_source` for channel or complete-material bindings using stable Fill and Anchor UIDs.
+- Verified Texture Set compatibility before creating Painter `SourceReference` objects.
+- Preserved the original active-channel set and source when a channel binding fails.
+
+### Typed baker configuration
+
+- Added `inspect_baking_parameters` for common settings or one baker, including current values, labels, widgets, ranges, enum labels, available bakers, standard UDIM numbers, and linked Texture Sets.
+- Added `configure_baking` for Texture Set enablement, enabled bakers, selected UDIMs, curvature method, common properties, and per-baker properties.
+- Accepted human-readable combobox labels and converted them through Painter's own enum metadata.
+- Added explicit `confirm=true`, local schema checks, Painter property-range validation, unknown property/baker/UDIM rejection, and full touched-state rollback.
+- Reported the union of Texture Sets affected by linked common and per-baker properties.
+
+### Validation
+
+- Expanded the automated suite from 37 to 43 tests and verified all 60 FastMCP schemas.
+- Live-tested 30 exposed parameters and three named presets on the starter Carbon Fiber material.
+- Round-tripped Carbon Roughness and an sRGB Carbon Color, then applied `Large Shiny Carbon Fiber`.
+- Created a mask Anchor Point, discovered its owner context, and connected it to another Fill's Base Color as a `SourceReference`.
+- Deleted both temporary Fill layers and verified exact layer-tree digest restoration.
+- Changed common Dilation Width from 32 to 33 and AO Secondary Rays from 64 to 65, detected their three-Texture-Set linked impact, and restored both original values.
+
 ## 0.5.0 - 2026-07-28
 
 Version 0.5.0 expands the server from 44 to 53 tools and closes two major automation gaps: resource-driven Fill authoring and observable long-running Painter jobs.

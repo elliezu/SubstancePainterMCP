@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0-0.5.0
+### Completed in 0.2.0-0.6.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -39,6 +39,9 @@ These features can be created, verified, and cleaned up in a sample project with
 - Advanced Planar, Spherical, and Cylindrical projection settings.
 - Persistent asynchronous bake jobs with progress and cancellation.
 - Planned asynchronous mesh reload with approved inputs and Texture Set diffs.
+- Typed procedural Substance parameter inspection, editing, and preset application.
+- Anchor Point discovery and Fill source bindings.
+- Transactional common/per-baker configuration with linked Texture Set reporting.
 
 ### Layer structure and recipes
 
@@ -87,7 +90,8 @@ These operations require approved output locations and result verification, but 
 - Completed in 0.4.0: inspect projections and set Fill, UV, or Triplanar transforms.
 - Completed in 0.5.0: inspect and connect channel/material resources.
 - Completed in 0.5.0: advanced Planar, Spherical, and Cylindrical projection parameters.
-- Next: expose procedural Substance parameters and Anchor Point bindings.
+- Completed in 0.6.0: typed procedural parameters, named presets, and Anchor Point bindings.
+- Next: expose sandboxed bitmap/resource inputs for procedural Substance graph inputs.
 
 ## P3 - Long-running jobs and event bridging
 
@@ -98,7 +102,9 @@ Painter's asynchronous APIs need to be connected to MCP progress and cancellatio
 - Completed read-only inspection of baker enablement, UV tiles, mesh-map assignments, and curvature mode.
 - Completed in 0.5.0: validate enabled Texture Sets/UV tiles before starting.
 - Completed in 0.5.0: persistent progress, terminal status, and cancellation through Painter events.
-- Next: configure individual baker parameters and selected mesh maps.
+- Completed in 0.6.0: configure enabled bakers, selected UDIMs, curvature mode, common properties, and individual baker properties transactionally.
+- Completed in 0.6.0: report Texture Sets affected by linked common/per-baker properties.
+- Next: add dedicated sandboxed high-poly/cage file assignment and configuration presets.
 - Investigate Painter 12.1 Auto Rebake and Skew Map capabilities.
 - Return structured failures by baker with relevant logs.
 

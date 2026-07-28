@@ -7,7 +7,7 @@
 
 An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-Version **0.5.0** provides 53 focused MCP tools. It adds resource-backed Fill authoring, advanced 3D projections, cancellable asynchronous baking, and planned asynchronous mesh reloads with Texture Set diffs. It remains live-validated against **Substance 3D Painter 12.1.1**.
+Version **0.6.0** provides 60 focused MCP tools. It adds typed procedural Substance controls, named source presets, Anchor Point bindings, and transactional common/per-baker configuration on top of the asynchronous baking and mesh-reload workflows introduced in 0.5. It remains live-validated against **Substance 3D Painter 12.1.1**.
 
 > This is an independent community project and is not affiliated with or endorsed by Adobe.
 
@@ -22,7 +22,10 @@ Version **0.5.0** provides 53 focused MCP tools. It adds resource-backed Fill au
 - Insert Fill, Paint, Generator, Filter, Levels, Anchor, and Smart Mask effects into mask stacks.
 - Apply shelf Smart Materials/Masks and configure UV or Triplanar Fill transforms.
 - Assign shelf resources to individual Fill channels or complete materials.
+- Inspect and edit typed procedural Substance parameters, including colors and enum labels.
+- Discover Anchor Points with owner context and connect them to Fill channels or materials.
 - Configure Planar, Spherical, and Cylindrical projection transforms and culling.
+- Inspect and transactionally configure common baking properties, individual bakers, UV tiles, and linked Texture Set impact.
 - Start, monitor, and cancel asynchronous mesh-map baking.
 - Preflight and monitor mesh reloads while preserving strokes and reporting Texture Set changes.
 - Audit project structure and search layers or resources without mutating the project.
@@ -55,6 +58,7 @@ Painter builds may expose newer features while reporting an older API version st
 | `get_capabilities` | Probe channels, blend modes, and version-dependent runtime features. |
 | `audit_project` | Report resolution, channels, layer hygiene, and outdated resources. |
 | `inspect_baking` | Inspect enabled bakers, UV tiles, and mesh-map assignments without baking. |
+| `inspect_baking_parameters` | Inspect typed common properties or one baker, including ranges and enum labels. |
 | `get_bake_job` | Read progress and terminal status for an asynchronous bake. |
 | `get_mesh_reload_job` | Read completion status and Texture Set changes for a mesh reload. |
 | `list_layers` | Return a recursive UID-based layer tree. |
@@ -62,6 +66,8 @@ Painter builds may expose newer features while reporting an older API version st
 | `snapshot_layer_tree` | Capture layers, masks, effects, active channels, and a deterministic digest. |
 | `diff_layer_snapshots` | Compare snapshots by UID and report added, removed, or changed nodes. |
 | `get_geometry_mask` | Inspect Mesh/UDIM mask state and available geometry elements. |
+| `get_fill_parameters` | Inspect procedural values, editor metadata, ranges, enums, and presets. |
+| `list_anchor_points` | Discover Anchor Points with Texture Set, stack, and owner context. |
 | `list_export_presets` | List built-in and shelf export presets. |
 | `inspect_export_preset` | Resolve a preset and preview its exact map names without writing. |
 | `list_export_profiles` | List curated VRChat, Blender, Unity, Unreal, and generic profiles. |
@@ -87,6 +93,9 @@ Painter builds may expose newer features while reporting an older API version st
 | `set_fill_projection` | Set Fill, UV, or Triplanar projection and transforms transactionally. |
 | `get_fill_sources` | Inspect material-mode or per-channel Fill sources. |
 | `set_fill_resource` | Assign a `resource://` asset to one channel or a complete Fill material. |
+| `set_fill_parameters` | Transactionally update typed procedural Substance parameters. |
+| `apply_fill_preset` | Apply a named preset exposed by the current procedural source. |
+| `set_fill_anchor_source` | Bind an Anchor Point to one Fill channel or the complete material. |
 | `set_fill_projection_advanced` | Configure UV, Triplanar, Planar, Spherical, or Cylindrical projection details. |
 | `set_active_channels` | Replace a Fill or Paint layer's active channel set. |
 | `set_layer_mask` | Add, replace, or remove a White/Black mask. |
@@ -112,6 +121,7 @@ Layer names are not unique in Painter. All mutation tools therefore use the UIDs
 | `replace_outdated_resources` | Apply Painter's atomic resource replacement after `confirm=true`. |
 | `start_bake` | Start an asynchronous bake after `confirm=true`, optionally creating a project copy first. |
 | `cancel_bake` | Request cooperative cancellation of a running bake job. |
+| `configure_baking` | Transactionally configure Texture Set enablement, bakers, UDIMs, curvature, and typed properties after `confirm=true`. |
 | `plan_mesh_reload` | Validate an approved mesh path and preview backup/current Texture Set scope. |
 | `start_mesh_reload` | Optionally back up, then asynchronously reload a mesh after `confirm=true`. |
 | `execute_python` | Run arbitrary Painter Python only when explicitly enabled. |
@@ -205,6 +215,8 @@ Mesh reload is independently disabled until `SP_MCP_MESH_ROOTS` is configured. `
 - Texture exports require approved roots, a preflight plan, explicit overwrite consent, and post-export file verification.
 - Baking and mesh reload require explicit confirmation, expose persistent job state, and never depend on a long-lived HTTP request.
 - Mesh inputs are restricted to approved roots and Painter-supported extensions.
+- Generic procedural/baker parameter setters reject file and resource widgets; filesystem-backed inputs require dedicated sandboxed tools instead of accepting arbitrary paths.
+- Baking configuration reports every linked Texture Set affected by shared common or per-baker parameters and rolls the touched state back if any update fails.
 - Arbitrary Python is opt-in and disabled by default.
 
 The server is designed for local use. Do not expose Painter's remote-scripting port to untrusted networks.
@@ -240,13 +252,17 @@ With Painter running and a disposable project open, use the live smoke test:
 $env:SP_MCP_MESH_ROOTS = "D:\Meshes"
 .venv\Scripts\python.exe scripts\live_v05.py `
   --mesh D:\Meshes\sample.fbx --run-bake --run-mesh-reload
+
+# v0.6 procedural parameters, presets, Anchor bindings, and baker config rollback
+.venv\Scripts\python.exe scripts\live_v06.py
 ```
 
-The 0.5.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 53 FastMCP schemas and 37 automated tests; assigned both a starter procedural Texture and a complete Base Material; round-tripped Planar, Spherical, Cylindrical, and Triplanar settings; cancelled a live bake through Painter's `StopSource`; and reloaded the same 5.57 MB FBX with stroke preservation. The reload completed successfully with no added or removed Texture Sets. Every temporary layer was removed and the tested layer tree returned to its original digest.
+The 0.6.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 60 FastMCP schemas and 43 automated tests; discovered 30 editable parameters and three presets on the starter Carbon Fiber material; round-tripped a float and sRGB color; applied a named preset; created, discovered, and connected a mask Anchor Point as a Base Color `SourceReference`; and restored the exact original layer-tree digest after cleanup. It also changed and restored common dilation and AO secondary-ray settings while correctly reporting that linked parameters affected all three Texture Sets.
 
 ## Roadmap and release notes
 
 - See [docs/RECIPES.md](docs/RECIPES.md) and the [VRChat outfit starter recipe](examples/recipes/vrchat_outfit.json) for transaction examples.
+- See [docs/PROCEDURAL_AND_BAKING.md](docs/PROCEDURAL_AND_BAKING.md) for typed procedural parameters, Anchor bindings, linked baker settings, and configuration examples.
 - See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 - See [docs/ROADMAP.md](docs/ROADMAP.md) for planned layer recipes, snapshots, backups, engine-specific export profiles, async baking, and Blender round-trip workflows.
 

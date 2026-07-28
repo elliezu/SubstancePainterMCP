@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -105,6 +106,7 @@ import substance_painter.baking as baking
 import substance_painter.export as export
 import substance_painter.layerstack as layerstack
 import substance_painter.project as project
+import substance_painter.source as source
 import substance_painter.textureset as textureset
 
 result = {
@@ -129,6 +131,9 @@ result = {
         "mesh_reload": hasattr(project, "reload_mesh"),
         "save_project_copy": hasattr(project, "save_as_copy"),
         "advanced_fill_projection": hasattr(layerstack, "Projection3DParams"),
+        "procedural_source_parameters": hasattr(source.SourceSubstance, "set_parameters"),
+        "anchor_source_binding": hasattr(layerstack, "AnchorPointEffectNode"),
+        "baking_parameter_editing": hasattr(baking.BakingParameters, "set"),
     },
 }
 '''
@@ -243,6 +248,309 @@ result = {"busy": project.is_busy(), "texture_sets": entries}
 '''
         return _unwrap(
             self.remote.execute_python_json(code, {"texture_set": texture_set})
+        )
+
+    def inspect_baking_parameters(
+        self, texture_set: str, baker: str | None = None
+    ) -> dict[str, Any]:
+        if not texture_set.strip():
+            raise ValueError("texture_set must be a non-empty name")
+        code = '''
+import substance_painter.baking as baking
+import substance_painter.textureset as textureset
+
+def json_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [json_value(item) for item in value]
+    if hasattr(value, "value_raw"):
+        return {"type": "Color", "value": list(value.value_raw), "color_space": str(value.color_space)}
+    return {"type": type(value).__name__, "value": str(value)}
+
+def describe(properties):
+    output = {}
+    for key, prop in properties.items():
+        try:
+            enums = prop.enum_values()
+        except Exception:
+            enums = {}
+        output[key] = {
+            "name": prop.name(),
+            "label": prop.label(),
+            "widget": prop.widget_type(),
+            "value": json_value(prop.value()),
+            "enum_values": enums,
+            "metadata": prop.properties(),
+        }
+    return output
+
+target = textureset.TextureSet.from_name(params["texture_set"])
+settings = baking.BakingParameters.from_texture_set(target)
+available = list(textureset.MeshMapUsage.__members__)
+requested = params.get("baker")
+if requested is not None and requested not in textureset.MeshMapUsage.__members__:
+    raise ValueError(f"Unknown baker: {requested}")
+baker_properties = None
+linked_baker_sets = []
+if requested is not None:
+    usage = textureset.MeshMapUsage.__members__[requested]
+    baker_properties = describe(settings.baker(usage))
+    linked_baker_sets = [
+        item.name() if callable(item.name) else item.name
+        for item in baking.get_linked_texture_sets(target, usage)
+    ]
+linked_common_sets = [
+    item.name() if callable(item.name) else item.name
+    for item in baking.get_linked_texture_sets_common_parameters(target)
+]
+result = {
+    "texture_set": params["texture_set"],
+    "enabled": settings.is_textureset_enabled(),
+    "enabled_bakers": [usage.name for usage in settings.get_enabled_bakers()],
+    "available_bakers": available,
+    "uv_tiles": [1001 + tile.u + 10 * tile.v for tile in target.all_uv_tiles()],
+    "enabled_uv_tiles": [1001 + tile.u + 10 * tile.v for tile in settings.get_enabled_uv_tiles()],
+    "curvature_method": settings.get_curvature_method().name,
+    "common": describe(settings.common()),
+    "baker": requested,
+    "baker_parameters": baker_properties,
+    "linked_common_texture_sets": linked_common_sets,
+    "linked_baker_texture_sets": linked_baker_sets,
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code, {"texture_set": texture_set, "baker": baker}
+            )
+        )
+
+    def configure_baking(
+        self,
+        texture_set: str,
+        enabled: bool | None = None,
+        enabled_bakers: list[str] | None = None,
+        enabled_uv_tiles: list[int] | None = None,
+        curvature_method: str | None = None,
+        common_values: dict[str, Any] | None = None,
+        baker_values: dict[str, dict[str, Any]] | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if not texture_set.strip():
+            raise ValueError("texture_set must be a non-empty name")
+        if enabled is not None and not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        if enabled_bakers is not None:
+            if any(not isinstance(name, str) or not name for name in enabled_bakers):
+                raise ValueError("enabled_bakers must contain non-empty names")
+            if len(set(enabled_bakers)) != len(enabled_bakers):
+                raise ValueError("enabled_bakers must not contain duplicates")
+        if enabled_uv_tiles is not None:
+            if any(
+                not isinstance(value, int) or isinstance(value, bool) or value < 1001
+                for value in enabled_uv_tiles
+            ):
+                raise ValueError("enabled_uv_tiles must contain UDIM integers >= 1001")
+            if len(set(enabled_uv_tiles)) != len(enabled_uv_tiles):
+                raise ValueError("enabled_uv_tiles must not contain duplicates")
+        if curvature_method not in {None, "FromMesh", "FromNormalMap"}:
+            raise ValueError("curvature_method must be FromMesh or FromNormalMap")
+        common_values = common_values or {}
+        baker_values = baker_values or {}
+        if common_values:
+            self._validate_parameter_values(common_values)
+        if not isinstance(baker_values, dict):
+            raise ValueError("baker_values must be an object")
+        for baker_name, values in baker_values.items():
+            if not isinstance(baker_name, str) or not baker_name:
+                raise ValueError("baker_values keys must be non-empty baker names")
+            self._validate_parameter_values(values)
+        if all(
+            value is None
+            for value in (enabled, enabled_bakers, enabled_uv_tiles, curvature_method)
+        ) and not common_values and not baker_values:
+            raise ValueError("At least one baking configuration change is required")
+        if not confirm:
+            raise PermissionError("Baking configuration modifies the project; set confirm=true")
+        code = '''
+import substance_painter.colormanagement as colormanagement
+import substance_painter.baking as baking
+import substance_painter.textureset as textureset
+
+def json_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [json_value(item) for item in value]
+    if hasattr(value, "value_raw"):
+        return {"type": "Color", "value": list(value.value_raw), "color_space": str(value.color_space)}
+    return {"type": type(value).__name__, "value": str(value)}
+
+def convert(prop, value):
+    current = prop.value()
+    widget = prop.widget_type()
+    if widget in {"File", "FileList", "Resource"}:
+        raise ValueError(f"File/resource parameter editing is disabled: {prop.short_name()}")
+    def checked(number):
+        metadata = prop.properties()
+        minimum = metadata.get("editorMin") if widget == "RandomSeed" else metadata.get("min")
+        maximum = metadata.get("editorMax") if widget == "RandomSeed" else metadata.get("max")
+        if isinstance(minimum, (int, float)) and number < minimum:
+            raise ValueError(f"{prop.short_name()} must be >= {minimum}")
+        if isinstance(maximum, (int, float)) and number > maximum:
+            raise ValueError(f"{prop.short_name()} must be <= {maximum}")
+        return number
+    if widget == "Color":
+        if not isinstance(value, list) or len(value) not in {3, 4}:
+            raise ValueError(f"{prop.short_name()} must be an RGB or RGBA array")
+        return colormanagement.Color(*value[:3])
+    if widget == "Combobox" and isinstance(value, str):
+        enums = prop.enum_values()
+        if value not in enums:
+            raise ValueError(f"Unknown {prop.short_name()} enum label: {value}")
+        return prop.enum_value(value)
+    if isinstance(current, tuple):
+        if not isinstance(value, list) or len(value) != len(current):
+            raise ValueError(f"{prop.short_name()} must contain {len(current)} values")
+        return tuple(value)
+    if isinstance(current, bool):
+        if not isinstance(value, bool):
+            raise ValueError(f"{prop.short_name()} must be a boolean")
+        return value
+    if isinstance(current, int) and not isinstance(current, bool):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{prop.short_name()} must be an integer")
+        return checked(value)
+    if isinstance(current, float):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"{prop.short_name()} must be a number")
+        return checked(float(value))
+    if isinstance(current, str):
+        if not isinstance(value, str):
+            raise ValueError(f"{prop.short_name()} must be a string")
+        return value
+    return value
+
+target = textureset.TextureSet.from_name(params["texture_set"])
+settings = baking.BakingParameters.from_texture_set(target)
+usage_members = textureset.MeshMapUsage.__members__
+requested_bakers = params.get("enabled_bakers")
+if requested_bakers is not None:
+    missing = [name for name in requested_bakers if name not in usage_members]
+    if missing:
+        raise ValueError(f"Unknown bakers: {missing}")
+requested_baker_values = params.get("baker_values") or {}
+missing = [name for name in requested_baker_values if name not in usage_members]
+if missing:
+    raise ValueError(f"Unknown bakers: {missing}")
+
+all_tiles = {1001 + tile.u + 10 * tile.v: tile for tile in target.all_uv_tiles()}
+requested_tiles = params.get("enabled_uv_tiles")
+if requested_tiles is not None:
+    missing_tiles = [udim for udim in requested_tiles if udim not in all_tiles]
+    if missing_tiles:
+        raise ValueError(f"Unknown UV tiles: {missing_tiles}")
+
+common_props = settings.common()
+unknown_common = sorted(set(params.get("common_values") or {}) - set(common_props))
+if unknown_common:
+    raise ValueError(f"Unknown common baking parameters: {unknown_common}")
+baker_props = {}
+for name, values in requested_baker_values.items():
+    props = settings.baker(usage_members[name])
+    unknown = sorted(set(values) - set(props))
+    if unknown:
+        raise ValueError(f"Unknown {name} baking parameters: {unknown}")
+    baker_props[name] = props
+
+original = {
+    "enabled": settings.is_textureset_enabled(),
+    "enabled_bakers": settings.get_enabled_bakers(),
+    "enabled_uv_tiles": settings.get_enabled_uv_tiles(),
+    "curvature_method": settings.get_curvature_method(),
+    "common": {common_props[name]: common_props[name].value() for name in (params.get("common_values") or {})},
+    "bakers": {
+        name: {props[key]: props[key].value() for key in requested_baker_values[name]}
+        for name, props in baker_props.items()
+    },
+}
+impacted = {params["texture_set"]}
+if params.get("common_values"):
+    impacted.update(
+        item.name() if callable(item.name) else item.name
+        for item in baking.get_linked_texture_sets_common_parameters(target)
+    )
+for name in requested_baker_values:
+    impacted.update(
+        item.name() if callable(item.name) else item.name
+        for item in baking.get_linked_texture_sets(target, usage_members[name])
+    )
+
+try:
+    if params.get("enabled") is not None:
+        settings.set_textureset_enabled(params["enabled"])
+    if requested_bakers is not None:
+        settings.set_enabled_bakers([usage_members[name] for name in requested_bakers])
+    if requested_tiles is not None:
+        settings.set_enabled_uv_tiles([all_tiles[udim] for udim in requested_tiles])
+    if params.get("curvature_method") is not None:
+        settings.set_curvature_method(baking.CurvatureMethod.__members__[params["curvature_method"]])
+    if params.get("common_values"):
+        settings.set({
+            common_props[name]: convert(common_props[name], value)
+            for name, value in params["common_values"].items()
+        })
+    for name, values in requested_baker_values.items():
+        props = baker_props[name]
+        settings.set({props[key]: convert(props[key], value) for key, value in values.items()})
+except Exception:
+    try:
+        settings.set_textureset_enabled(original["enabled"])
+        settings.set_enabled_bakers(original["enabled_bakers"])
+        settings.set_enabled_uv_tiles(original["enabled_uv_tiles"])
+        settings.set_curvature_method(original["curvature_method"])
+        if original["common"]:
+            settings.set(original["common"])
+        for values in original["bakers"].values():
+            if values:
+                settings.set(values)
+    except Exception:
+        pass
+    raise
+
+verified_common = settings.common()
+verified_bakers = {
+    name: settings.baker(usage_members[name]) for name in requested_baker_values
+}
+result = {
+    "texture_set": params["texture_set"],
+    "enabled": settings.is_textureset_enabled(),
+    "enabled_bakers": [usage.name for usage in settings.get_enabled_bakers()],
+    "enabled_uv_tiles": [1001 + tile.u + 10 * tile.v for tile in settings.get_enabled_uv_tiles()],
+    "curvature_method": settings.get_curvature_method().name,
+    "common_values": {
+        name: json_value(verified_common[name].value()) for name in (params.get("common_values") or {})
+    },
+    "baker_values": {
+        name: {key: json_value(verified_bakers[name][key].value()) for key in values}
+        for name, values in requested_baker_values.items()
+    },
+    "impacted_texture_sets": sorted(impacted),
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "texture_set": texture_set,
+                    "enabled": enabled,
+                    "enabled_bakers": enabled_bakers,
+                    "enabled_uv_tiles": enabled_uv_tiles,
+                    "curvature_method": curvature_method,
+                    "common_values": common_values,
+                    "baker_values": baker_values,
+                },
+            )
         )
 
     def start_bake(
@@ -1607,6 +1915,365 @@ result = {
             )
         )
 
+    def get_fill_parameters(
+        self, uid: int, channel: str | None = None
+    ) -> dict[str, Any]:
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.textureset as textureset
+
+def json_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [json_value(item) for item in value]
+    if hasattr(value, "value_raw"):
+        return {
+            "type": "Color",
+            "value": list(value.value_raw),
+            "color_space": str(value.color_space),
+        }
+    return {"type": type(value).__name__, "value": str(value)}
+
+def resolve_source(node, requested):
+    if node.source_mode.name == "Material":
+        if requested is not None:
+            raise ValueError("channel must be omitted for a material-mode Fill")
+        return node.get_material_source(), None
+    if not requested:
+        raise ValueError("channel is required for a split-mode Fill")
+    aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+    name = requested if requested in textureset.ChannelType.__members__ else aliases.get(requested)
+    if not name or name not in textureset.ChannelType.__members__:
+        raise ValueError(f"Unknown channel: {requested}")
+    resolved = textureset.ChannelType.__members__[name]
+    if resolved not in node.active_channels:
+        raise ValueError(f"Channel is not active on this Fill: {requested}")
+    return node.get_source(resolved), resolved.name
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+source, channel_name = resolve_source(node, params.get("channel"))
+if not hasattr(source, "get_parameters") or not hasattr(source, "get_properties"):
+    raise TypeError(f"Fill source {type(source).__name__} has no procedural parameters")
+properties = source.get_properties()
+values = source.get_parameters()
+described = {}
+for name, prop in properties.items():
+    try:
+        enums = prop.enum_values()
+    except Exception:
+        enums = {}
+    described[name] = {
+        "label": prop.label(),
+        "widget": prop.widget_type(),
+        "value": json_value(values.get(name, prop.value())),
+        "enum_values": enums,
+        "metadata": prop.properties(),
+    }
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "source_mode": node.source_mode.name,
+    "channel": channel_name,
+    "source_type": type(source).__name__,
+    "presets": source.get_preset_list() if hasattr(source, "get_preset_list") else [],
+    "parameters": described,
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(code, {"uid": uid, "channel": channel})
+        )
+
+    def set_fill_parameters(
+        self,
+        uid: int,
+        values: dict[str, Any],
+        channel: str | None = None,
+    ) -> dict[str, Any]:
+        self._validate_parameter_values(values)
+        code = '''
+import substance_painter.colormanagement as colormanagement
+import substance_painter.layerstack as layerstack
+import substance_painter.textureset as textureset
+
+def json_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [json_value(item) for item in value]
+    if hasattr(value, "value_raw"):
+        return {"type": "Color", "value": list(value.value_raw), "color_space": str(value.color_space)}
+    return {"type": type(value).__name__, "value": str(value)}
+
+def resolve_source(node, requested):
+    if node.source_mode.name == "Material":
+        if requested is not None:
+            raise ValueError("channel must be omitted for a material-mode Fill")
+        return node.get_material_source(), None
+    if not requested:
+        raise ValueError("channel is required for a split-mode Fill")
+    aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+    name = requested if requested in textureset.ChannelType.__members__ else aliases.get(requested)
+    if not name or name not in textureset.ChannelType.__members__:
+        raise ValueError(f"Unknown channel: {requested}")
+    resolved = textureset.ChannelType.__members__[name]
+    if resolved not in node.active_channels:
+        raise ValueError(f"Channel is not active on this Fill: {requested}")
+    return node.get_source(resolved), resolved.name
+
+def convert(prop, value):
+    current = prop.value()
+    widget = prop.widget_type()
+    if widget in {"File", "FileList", "Resource"}:
+        raise ValueError(f"File/resource parameter editing is disabled: {prop.short_name()}")
+    def checked(number):
+        metadata = prop.properties()
+        minimum = metadata.get("editorMin") if widget == "RandomSeed" else metadata.get("min")
+        maximum = metadata.get("editorMax") if widget == "RandomSeed" else metadata.get("max")
+        if isinstance(minimum, (int, float)) and number < minimum:
+            raise ValueError(f"{prop.short_name()} must be >= {minimum}")
+        if isinstance(maximum, (int, float)) and number > maximum:
+            raise ValueError(f"{prop.short_name()} must be <= {maximum}")
+        return number
+    if widget == "Color":
+        if not isinstance(value, list) or len(value) not in {3, 4}:
+            raise ValueError(f"{prop.short_name()} must be an RGB or RGBA array")
+        if any(not isinstance(item, (int, float)) or isinstance(item, bool) for item in value):
+            raise ValueError(f"{prop.short_name()} color components must be numbers")
+        return colormanagement.Color(*value[:3])
+    if widget == "Combobox" and isinstance(value, str):
+        enums = prop.enum_values()
+        if value not in enums:
+            raise ValueError(f"Unknown {prop.short_name()} enum label: {value}")
+        return prop.enum_value(value)
+    if isinstance(current, tuple):
+        if not isinstance(value, list) or len(value) != len(current):
+            raise ValueError(f"{prop.short_name()} must contain {len(current)} values")
+        return tuple(value)
+    if isinstance(current, bool):
+        if not isinstance(value, bool):
+            raise ValueError(f"{prop.short_name()} must be a boolean")
+        return value
+    if isinstance(current, int) and not isinstance(current, bool):
+        if isinstance(value, bool) and widget == "Togglebutton":
+            return int(value)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{prop.short_name()} must be an integer")
+        return checked(value)
+    if isinstance(current, float):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"{prop.short_name()} must be a number")
+        return checked(float(value))
+    if isinstance(current, str):
+        if not isinstance(value, str):
+            raise ValueError(f"{prop.short_name()} must be a string")
+        return value
+    return value
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+source, channel_name = resolve_source(node, params.get("channel"))
+if not hasattr(source, "get_parameters") or not hasattr(source, "get_properties"):
+    raise TypeError(f"Fill source {type(source).__name__} has no procedural parameters")
+properties = source.get_properties()
+unknown = sorted(set(params["values"]) - set(properties))
+if unknown:
+    raise ValueError(f"Unknown procedural parameters: {unknown}")
+converted = {name: convert(properties[name], value) for name, value in params["values"].items()}
+original = source.get_parameters()
+try:
+    source.set_parameters(converted)
+except Exception:
+    try:
+        source.set_parameters({name: original[name] for name in converted})
+    except Exception:
+        pass
+    raise
+verified = source.get_parameters()
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "source_mode": node.source_mode.name,
+    "channel": channel_name,
+    "updated": {name: json_value(verified[name]) for name in converted},
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code, {"uid": uid, "channel": channel, "values": values}
+            )
+        )
+
+    def apply_fill_preset(
+        self, uid: int, preset: str, channel: str | None = None
+    ) -> dict[str, Any]:
+        if not preset.strip():
+            raise ValueError("preset must be a non-empty name")
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.textureset as textureset
+
+def resolve_source(node, requested):
+    if node.source_mode.name == "Material":
+        if requested is not None:
+            raise ValueError("channel must be omitted for a material-mode Fill")
+        return node.get_material_source(), None
+    if not requested:
+        raise ValueError("channel is required for a split-mode Fill")
+    aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+    name = requested if requested in textureset.ChannelType.__members__ else aliases.get(requested)
+    if not name or name not in textureset.ChannelType.__members__:
+        raise ValueError(f"Unknown channel: {requested}")
+    resolved = textureset.ChannelType.__members__[name]
+    if resolved not in node.active_channels:
+        raise ValueError(f"Channel is not active on this Fill: {requested}")
+    return node.get_source(resolved), resolved.name
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+source, channel_name = resolve_source(node, params.get("channel"))
+if not hasattr(source, "get_preset_list") or not hasattr(source, "apply_preset"):
+    raise TypeError(f"Fill source {type(source).__name__} has no procedural presets")
+available = source.get_preset_list()
+if params["preset"] not in available:
+    raise ValueError(f"Unknown source preset: {params['preset']}")
+original = source.get_parameters()
+try:
+    source.apply_preset(params["preset"])
+except Exception:
+    try:
+        source.set_parameters(original)
+    except Exception:
+        pass
+    raise
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "channel": channel_name,
+    "preset": params["preset"],
+    "available_presets": available,
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code, {"uid": uid, "preset": preset, "channel": channel}
+            )
+        )
+
+    def list_anchor_points(self, texture_set: str | None = None) -> dict[str, Any]:
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.textureset as textureset
+
+sets = ([textureset.TextureSet.from_name(params["texture_set"])]
+        if params.get("texture_set") else textureset.all_texture_sets())
+
+def flatten(nodes):
+    output = []
+    for node in nodes:
+        output.append(node)
+        if isinstance(node, layerstack.GroupLayerNode):
+            output.extend(flatten(node.sub_layers()))
+    return output
+
+anchors = []
+for item in sets:
+    set_name = item.name() if callable(item.name) else item.name
+    for stack in item.all_stacks():
+        for owner in flatten(layerstack.get_root_layer_nodes(stack)):
+            effects = list(owner.content_effects()) if isinstance(owner, layerstack.LayerNode) else []
+            if isinstance(owner, layerstack.LayerNode) and owner.has_mask():
+                effects.extend(owner.mask_effects())
+            for effect in effects:
+                if isinstance(effect, layerstack.AnchorPointEffectNode):
+                    anchors.append({
+                        "uid": effect.uid(),
+                        "name": effect.get_name(),
+                        "texture_set": set_name,
+                        "stack": stack.name(),
+                        "owner_uid": owner.uid(),
+                        "owner_name": owner.get_name(),
+                        "in_mask": effect in (owner.mask_effects() if owner.has_mask() else []),
+                    })
+result = {"count": len(anchors), "anchors": anchors}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(code, {"texture_set": texture_set})
+        )
+
+    def set_fill_anchor_source(
+        self,
+        uid: int,
+        anchor_uid: int,
+        channel: str | None = None,
+        material_mode: bool = False,
+    ) -> dict[str, Any]:
+        if material_mode and channel is not None:
+            raise ValueError("channel must be omitted when material_mode=true")
+        if not material_mode and not channel:
+            raise ValueError("channel is required when material_mode=false")
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.textureset as textureset
+
+node = layerstack.get_node_by_uid(params["uid"])
+anchor = layerstack.get_node_by_uid(params["anchor_uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+if not isinstance(anchor, layerstack.AnchorPointEffectNode):
+    raise TypeError(f"Node {params['anchor_uid']} is not an AnchorPointEffectNode")
+if node.get_texture_set() != anchor.get_texture_set():
+    raise ValueError("Fill and Anchor Point must belong to the same Texture Set")
+if params["material_mode"]:
+    source = node.set_material_source(anchor)
+    resolved_channel = None
+else:
+    aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+    requested = params["channel"]
+    channel_name = requested if requested in textureset.ChannelType.__members__ else aliases.get(requested)
+    if not channel_name or channel_name not in textureset.ChannelType.__members__:
+        raise ValueError(f"Unknown channel: {requested}")
+    resolved = textureset.ChannelType.__members__[channel_name]
+    original_channels = set(node.active_channels)
+    original_source = node.get_source(resolved) if resolved in original_channels else None
+    try:
+        node.active_channels = original_channels | {resolved}
+        source = node.set_source(resolved, anchor)
+    except Exception:
+        if original_source is not None:
+            try:
+                node.set_source(resolved, original_source)
+            except Exception:
+                pass
+        node.active_channels = original_channels
+        raise
+    resolved_channel = resolved.name
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "source_mode": node.source_mode.name,
+    "channel": resolved_channel,
+    "source_type": type(source).__name__,
+    "anchor_uid": anchor.uid(),
+    "anchor_name": anchor.get_name(),
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "uid": uid,
+                    "anchor_uid": anchor_uid,
+                    "channel": channel,
+                    "material_mode": material_mode,
+                },
+            )
+        )
+
     def set_fill_base_color(self, uid: int, color: list[float]) -> dict[str, Any]:
         self._validate_color(color)
         code = '''
@@ -2574,3 +3241,21 @@ result = {"uid": node.uid(), "layer": node.get_name(), "kind": params["kind"]}
             raise ValueError("color must contain exactly three numbers")
         if any(value < 0 or value > 1 for value in color):
             raise ValueError("color components must be in the 0..1 range")
+
+    @staticmethod
+    def _validate_parameter_values(values: dict[str, Any]) -> None:
+        if not isinstance(values, dict) or not values:
+            raise ValueError("values must be a non-empty object")
+        for name, value in values.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("parameter names must be non-empty strings")
+            items = value if isinstance(value, list) else [value]
+            if not isinstance(value, (str, int, float, bool, list)):
+                raise ValueError(f"Unsupported value type for parameter: {name}")
+            if isinstance(value, list) and not value:
+                raise ValueError(f"Parameter arrays must not be empty: {name}")
+            for item in items:
+                if not isinstance(item, (str, int, float, bool)):
+                    raise ValueError(f"Parameter arrays must contain scalar values: {name}")
+                if isinstance(item, float) and not math.isfinite(item):
+                    raise ValueError(f"Parameter values must be finite: {name}")

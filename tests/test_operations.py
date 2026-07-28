@@ -213,6 +213,93 @@ def test_mesh_reload_requires_approved_existing_mesh(monkeypatch, tmp_path):
         operations.plan_mesh_reload(str(unsupported))
 
 
+def test_fill_parameter_values_are_validated_locally():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="non-empty"):
+        operations.set_fill_parameters(1, {})
+    with pytest.raises(ValueError, match="finite"):
+        operations.set_fill_parameters(1, {"roughness": float("nan")})
+    with pytest.raises(ValueError, match="Unsupported value type"):
+        operations.set_fill_parameters(1, {"roughness": {"value": 0.5}})
+    with pytest.raises(ValueError, match="scalar"):
+        operations.set_fill_parameters(1, {"roughness": [[0.5]]})
+    assert operations.remote.calls == []
+
+
+def test_fill_parameter_tools_transport_channel_and_values():
+    remote = FakeRemote()
+    operations = PainterOperations(remote)
+    operations.get_fill_parameters(7, "BaseColor")
+    operations.set_fill_parameters(7, {"scale": 0.5}, "BaseColor")
+    operations.apply_fill_preset(7, "Soft", "BaseColor")
+    assert remote.calls[0][1] == {"uid": 7, "channel": "BaseColor"}
+    assert remote.calls[1][1] == {
+        "uid": 7,
+        "channel": "BaseColor",
+        "values": {"scale": 0.5},
+    }
+    assert remote.calls[2][1] == {
+        "uid": 7,
+        "preset": "Soft",
+        "channel": "BaseColor",
+    }
+
+
+def test_fill_preset_and_anchor_validation_is_local():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="non-empty"):
+        operations.apply_fill_preset(1, "  ")
+    with pytest.raises(ValueError, match="required"):
+        operations.set_fill_anchor_source(1, 2)
+    with pytest.raises(ValueError, match="omitted"):
+        operations.set_fill_anchor_source(1, 2, "BaseColor", material_mode=True)
+    assert operations.remote.calls == []
+
+
+def test_baking_configuration_requires_valid_confirmed_change():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="At least one"):
+        operations.configure_baking("Body", confirm=True)
+    with pytest.raises(ValueError, match="duplicates"):
+        operations.configure_baking(
+            "Body", enabled_bakers=["AO", "AO"], confirm=True
+        )
+    with pytest.raises(ValueError, match="UDIM"):
+        operations.configure_baking("Body", enabled_uv_tiles=[1000], confirm=True)
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.configure_baking("Body", enabled=True)
+    assert operations.remote.calls == []
+
+
+def test_baking_configuration_transports_typed_changes():
+    remote = FakeRemote()
+    PainterOperations(remote).configure_baking(
+        "Body",
+        enabled=True,
+        enabled_bakers=["AO", "Curvature"],
+        enabled_uv_tiles=[1001],
+        curvature_method="FromMesh",
+        common_values={"DilationWidth": 16},
+        baker_values={"AO": {"NbSecondary": 32}},
+        confirm=True,
+    )
+    assert remote.calls[0][1] == {
+        "texture_set": "Body",
+        "enabled": True,
+        "enabled_bakers": ["AO", "Curvature"],
+        "enabled_uv_tiles": [1001],
+        "curvature_method": "FromMesh",
+        "common_values": {"DilationWidth": 16},
+        "baker_values": {"AO": {"NbSecondary": 32}},
+    }
+
+
+def test_baking_parameter_inspection_transports_baker():
+    remote = FakeRemote()
+    PainterOperations(remote).inspect_baking_parameters("Body", "AO")
+    assert remote.calls[0][1] == {"texture_set": "Body", "baker": "AO"}
+
+
 def test_smart_material_requires_resource_url():
     with pytest.raises(ValueError, match="resource://"):
         PainterOperations(FakeRemote()).insert_smart_material("https://example.com/material")

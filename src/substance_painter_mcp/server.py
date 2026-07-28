@@ -52,6 +52,38 @@ def inspect_baking(texture_set: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+def inspect_baking_parameters(
+    texture_set: str, baker: str | None = None
+) -> dict[str, Any]:
+    """Inspect editable common parameters and one baker's typed property metadata."""
+    return operations.inspect_baking_parameters(texture_set, baker)
+
+
+@mcp.tool()
+def configure_baking(
+    texture_set: str,
+    enabled: bool | None = None,
+    enabled_bakers: list[str] | None = None,
+    enabled_uv_tiles: list[int] | None = None,
+    curvature_method: str | None = None,
+    common_values: dict[str, Any] | None = None,
+    baker_values: dict[str, dict[str, Any]] | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Transactionally configure Texture Set, UV tile, common, and per-baker settings."""
+    return operations.configure_baking(
+        texture_set,
+        enabled,
+        enabled_bakers,
+        enabled_uv_tiles,
+        curvature_method,
+        common_values,
+        baker_values,
+        confirm,
+    )
+
+
+@mcp.tool()
 def start_bake(
     texture_set: str,
     confirm: bool = False,
@@ -257,6 +289,47 @@ def get_fill_projection(uid: int) -> dict[str, Any]:
 def get_fill_sources(uid: int) -> dict[str, Any]:
     """Inspect a Fill layer's material or per-channel color/resource sources."""
     return operations.get_fill_sources(uid)
+
+
+@mcp.tool()
+def get_fill_parameters(uid: int, channel: str | None = None) -> dict[str, Any]:
+    """Inspect procedural parameters, metadata, and presets for a Fill source."""
+    return operations.get_fill_parameters(uid, channel)
+
+
+@mcp.tool()
+def set_fill_parameters(
+    uid: int,
+    values: dict[str, Any],
+    channel: str | None = None,
+) -> dict[str, Any]:
+    """Transactionally update typed procedural parameters on a Fill source."""
+    return operations.set_fill_parameters(uid, values, channel)
+
+
+@mcp.tool()
+def apply_fill_preset(
+    uid: int, preset: str, channel: str | None = None
+) -> dict[str, Any]:
+    """Apply a named preset exposed by a procedural Fill source."""
+    return operations.apply_fill_preset(uid, preset, channel)
+
+
+@mcp.tool()
+def list_anchor_points(texture_set: str | None = None) -> dict[str, Any]:
+    """List Anchor Point effects with owner and Texture Set context."""
+    return operations.list_anchor_points(texture_set)
+
+
+@mcp.tool()
+def set_fill_anchor_source(
+    uid: int,
+    anchor_uid: int,
+    channel: str | None = None,
+    material_mode: bool = False,
+) -> dict[str, Any]:
+    """Connect an Anchor Point to one Fill channel or the complete material source."""
+    return operations.set_fill_anchor_source(uid, anchor_uid, channel, material_mode)
 
 
 @mcp.tool()
