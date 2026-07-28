@@ -68,6 +68,93 @@ def test_resource_search_validates_query_and_limit():
         operations.search_resources("wood", 0)
 
 
+def test_resource_search_transports_server_side_filters():
+    remote = FakeRemote()
+    PainterOperations(remote).search_resources(
+        "wood", limit=12, resource_type="Substance", usage="Generator"
+    )
+    assert remote.calls[0][1] == {
+        "query": "wood",
+        "limit": 12,
+        "resource_type": "Substance",
+        "usage": "Generator",
+    }
+
+
+def test_active_channels_rejects_empty_or_duplicate_values():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="at least one"):
+        operations.set_active_channels(1, [])
+    with pytest.raises(ValueError, match="duplicates"):
+        operations.set_active_channels(1, ["BaseColor", "BaseColor"])
+
+
+def test_active_channels_transports_uid_and_names():
+    remote = FakeRemote()
+    PainterOperations(remote).set_active_channels(4, ["BaseColor", "Roughness"])
+    assert remote.calls[0][1] == {
+        "uid": 4,
+        "channels": ["BaseColor", "Roughness"],
+    }
+
+
+def test_layer_recipe_normalizes_scalar_channels():
+    remote = FakeRemote()
+    recipe = [
+        {
+            "type": "group",
+            "name": "Look",
+            "children": [
+                {"type": "fill", "name": "Rough", "channels": {"Roughness": 0.25}}
+            ],
+        }
+    ]
+    PainterOperations(remote).create_layer_recipe(recipe)
+    assert remote.calls[0][1]["recipe"][0]["children"][0]["channels"] == {
+        "Roughness": [0.25, 0.25, 0.25]
+    }
+
+
+def test_layer_recipe_rejects_children_on_non_group():
+    recipe = [
+        {"type": "fill", "name": "Invalid", "children": [{"type": "paint", "name": "P"}]}
+    ]
+    with pytest.raises(ValueError, match="only group"):
+        PainterOperations(FakeRemote()).create_layer_recipe(recipe)
+
+
+def test_snapshot_adds_deterministic_digest():
+    payload = {"texture_set": "Body", "stack": "Body", "layers": []}
+    result = PainterOperations(FakeRemote({"success": True, "data": payload})).snapshot_layer_tree()
+    assert result["texture_set"] == "Body"
+    assert len(result["sha256"]) == 64
+
+
+def test_save_project_copy_requires_configured_root(monkeypatch, tmp_path):
+    monkeypatch.delenv("SP_MCP_PROJECT_ROOTS", raising=False)
+    with pytest.raises(PermissionError, match="disabled"):
+        PainterOperations(FakeRemote()).save_project_copy(str(tmp_path / "copy.spp"))
+
+
+def test_save_project_copy_requires_spp_extension(monkeypatch, tmp_path):
+    monkeypatch.setenv("SP_MCP_PROJECT_ROOTS", str(tmp_path))
+    with pytest.raises(ValueError, match=".spp"):
+        PainterOperations(FakeRemote()).save_project_copy(str(tmp_path / "copy.zip"))
+
+
+def test_smart_asset_rejects_unsafe_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("SP_MCP_EXPORT_ROOTS", str(tmp_path))
+    with pytest.raises(ValueError, match="file name"):
+        PainterOperations(FakeRemote()).export_smart_material(
+            1, "../escape", str(tmp_path)
+        )
+
+
+def test_unknown_export_profile_is_rejected():
+    with pytest.raises(ValueError, match="Unknown export profile"):
+        PainterOperations(FakeRemote()).plan_profile_export("C:/exports", "missing")
+
+
 def test_export_requires_configured_root(monkeypatch, tmp_path):
     monkeypatch.delenv("SP_MCP_EXPORT_ROOTS", raising=False)
     with pytest.raises(PermissionError, match="disabled"):

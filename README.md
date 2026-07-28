@@ -7,7 +7,7 @@
 
 An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-Version **0.2.0** is a major modernization of the original proof of concept. It provides 22 focused MCP tools, an installable Python package, bounded connection timeouts, capability-based compatibility, UID-safe layer editing, guarded texture exports, automated tests, and live validation against **Substance 3D Painter 12.1.1**.
+Version **0.3.0** provides 36 focused MCP tools, transactional layer recipes, detailed layer snapshots, mask effects, baking inspection, filtered resource search, curated engine exports, verified Smart Material/Mask output, and sandboxed project backups. It remains live-validated against **Substance 3D Painter 12.1.1**.
 
 > This is an independent community project and is not affiliated with or endorsed by Adobe.
 
@@ -15,9 +15,12 @@ Version **0.2.0** is a major modernization of the original proof of concept. It 
 
 - Inspect the open project, Texture Sets, channels, resources, export presets, and complete layer tree.
 - Create and edit Fill, Paint, and Group layers through stable layer UIDs.
+- Build nested layer recipes atomically and roll back every created node if a step fails.
 - Set OpenPBR-aware Fill channels, masks, visibility, opacity, blend modes, names, and selection.
+- Insert Fill, Paint, Generator, Filter, Levels, Anchor, and Smart Mask effects into mask stacks.
 - Audit project structure and search layers or resources without mutating the project.
 - Preview exact export paths before writing and restrict exports to explicitly allowed directories.
+- Save verified project copies without changing the current project's location.
 - Detect runtime capabilities instead of trusting Painter's reported Python API version alone.
 - Keep arbitrary Python execution disabled unless the user explicitly opts in.
 
@@ -44,11 +47,16 @@ Painter builds may expose newer features while reporting an older API version st
 | `get_project_info` | Return the project path and Texture Sets. |
 | `get_capabilities` | Probe channels, blend modes, and version-dependent runtime features. |
 | `audit_project` | Report resolution, channels, layer hygiene, and outdated resources. |
+| `inspect_baking` | Inspect enabled bakers, UV tiles, and mesh-map assignments without baking. |
 | `list_layers` | Return a recursive UID-based layer tree. |
 | `find_layers` | Search by name, type, or visibility and include parent paths. |
+| `snapshot_layer_tree` | Capture layers, masks, effects, active channels, and a deterministic digest. |
 | `list_export_presets` | List built-in and shelf export presets. |
+| `inspect_export_preset` | Resolve a preset and preview its exact map names without writing. |
+| `list_export_profiles` | List curated VRChat, Blender, Unity, Unreal, and generic profiles. |
 | `list_project_resources` | List resources referenced by the current project. |
 | `search_resources` | Search resources by query, usage, URL, or type. |
+| `find_outdated_resources` | Build a read-only replacement plan for outdated project resources. |
 
 ### Layer editing
 
@@ -57,9 +65,12 @@ Painter builds may expose newer features while reporting an older API version st
 | `create_fill_layer` | Create a Fill layer with an optional base color. |
 | `create_paint_layer` | Create a Paint layer. |
 | `create_group` | Create a layer group. |
+| `create_layer_recipe` | Create nested Group/Fill/Paint structures atomically with rollback. |
 | `set_fill_base_color` | Convert an sRGB input color into Painter's working color space. |
 | `set_fill_channels` | Set multiple uniform channels, including Roughness, Metallic, and Emission aliases. |
+| `set_active_channels` | Replace a Fill or Paint layer's active channel set. |
 | `set_layer_mask` | Add, replace, or remove a White/Black mask. |
+| `insert_mask_effect` | Insert procedural or paint effects into a layer's mask stack. |
 | `set_layer_properties` | Set visibility and channel-specific opacity or blend mode. |
 | `rename_layer` | Rename a layer by UID. |
 | `select_layers` | Select one or more layers by UID. |
@@ -73,6 +84,12 @@ Layer names are not unique in Painter. All mutation tools therefore use the UIDs
 |---|---|
 | `plan_texture_export` | Resolve expected output files and conflicts without writing anything. |
 | `export_textures` | Export within approved roots and verify every generated file and size. |
+| `plan_profile_export` | Preview a curated engine-profile export. |
+| `export_with_profile` | Export with a curated profile and verify generated files. |
+| `save_project_copy` | Write a verified `.spp` backup without relocating the current project. |
+| `export_smart_material` | Export a Group as a verified `.spsm` file. |
+| `export_smart_mask` | Export a layer mask as a verified `.spmsk` file. |
+| `replace_outdated_resources` | Apply Painter's atomic resource replacement after `confirm=true`. |
 | `execute_python` | Run arbitrary Painter Python only when explicitly enabled. |
 
 ## Installation
@@ -125,7 +142,8 @@ Example for Claude Desktop on Windows:
       "args": ["-m", "substance_painter_mcp"],
       "env": {
         "SP_MCP_TIMEOUT": "120",
-        "SP_MCP_EXPORT_ROOTS": "D:\\SubstanceExports"
+        "SP_MCP_EXPORT_ROOTS": "D:\\SubstanceExports",
+        "SP_MCP_PROJECT_ROOTS": "D:\\SubstanceBackups"
       }
     }
   }
@@ -143,8 +161,11 @@ Replace the paths with your installation and export directories. You may also us
 | `SP_MCP_TIMEOUT` | `30` | HTTP timeout in seconds. |
 | `SP_MCP_ALLOW_EXECUTE_PYTHON` | unset | Set to `1` to expose arbitrary Python execution. |
 | `SP_MCP_EXPORT_ROOTS` | unset | Approved export roots. Separate multiple Windows paths with `;`. |
+| `SP_MCP_PROJECT_ROOTS` | unset | Approved roots for `.spp` project copies. |
 
 Exports are disabled until `SP_MCP_EXPORT_ROOTS` is configured. `plan_texture_export` performs a read-only preflight. `export_textures` repeats the validation and refuses existing targets unless `overwrite=true` is explicitly supplied.
+
+Project copying is independently disabled until `SP_MCP_PROJECT_ROOTS` is configured. `save_project_copy` uses Painter's `save_as_copy`, verifies the resulting file, and confirms that the current project path did not change.
 
 ## Safety model
 
@@ -176,13 +197,17 @@ With Painter running and a disposable project open, use the live smoke test:
 
 # Reversible create -> edit -> verify -> delete round trip
 .venv\Scripts\python.exe scripts\live_smoke.py --write
+
+# Full v0.3 transaction, mask-effect, Smart asset, export, and backup validation
+.venv\Scripts\python.exe scripts\live_features.py `
+  --output-root D:\SubstanceMCPTest --texture-export --project-copy
 ```
 
-The 0.2.0 validation run used Painter 12.1.1 and a sample project. It verified registration of all 22 MCP tools, then live-exercised connection and project inspection, reversible Group/Fill/Paint creation, OpenPBR channel aliases, White/Black masks, opacity and blend modes, multi-layer selection, project auditing, a 1,845-resource shelf search, preset discovery, and a guarded 256 px PNG texture export with output-file verification. Temporary layers and export artifacts were removed after validation.
+The 0.3.0 validation run used Painter 12.1.1 and a saved test project with three UDIM Texture Sets. It verified all 36 FastMCP tool schemas, multi-node recipe rollback by comparing pre/post SHA-256 snapshots, nested layer creation, OpenPBR channel aliases, mask Levels/Anchor/Generator insertion, filtered generator search, preset map inspection, `.spsm` and `.spmsk` export, 18 guarded 256 px PNG texture outputs, and a verified 951 MB `.spp` copy. The original project path remained unchanged, all temporary layers were removed, and test artifacts were deleted after verification.
 
 ## Roadmap and release notes
 
-- See [CHANGELOG.md](CHANGELOG.md) for the detailed 0.2.0 modernization notes.
+- See [CHANGELOG.md](CHANGELOG.md) for detailed 0.3.0 and 0.2.0 release notes.
 - See [docs/ROADMAP.md](docs/ROADMAP.md) for planned layer recipes, snapshots, backups, engine-specific export profiles, async baking, and Blender round-trip workflows.
 
 ## License

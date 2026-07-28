@@ -46,6 +46,12 @@ def audit_project() -> dict[str, Any]:
 
 
 @mcp.tool()
+def inspect_baking(texture_set: str | None = None) -> dict[str, Any]:
+    """Inspect enabled bakers, UV tiles, and mesh-map assignments without starting a bake."""
+    return operations.inspect_baking(texture_set)
+
+
+@mcp.tool()
 def list_layers(texture_set: str | None = None, recursive: bool = True) -> dict[str, Any]:
     """List layers with stable UIDs, types, visibility, and optional group children."""
     return operations.list_layers(texture_set=texture_set, recursive=recursive)
@@ -60,6 +66,12 @@ def find_layers(
 ) -> dict[str, Any]:
     """Search layers by partial name, exact node type, and visibility."""
     return operations.find_layers(query, node_type, visible, texture_set)
+
+
+@mcp.tool()
+def snapshot_layer_tree(texture_set: str | None = None) -> dict[str, Any]:
+    """Capture a detailed layer/effect snapshot with a deterministic SHA-256 digest."""
+    return operations.snapshot_layer_tree(texture_set)
 
 
 @mcp.tool()
@@ -85,6 +97,15 @@ def create_paint_layer(name: str, texture_set: str | None = None) -> dict[str, A
 
 
 @mcp.tool()
+def create_layer_recipe(
+    recipe: list[dict[str, Any]],
+    texture_set: str | None = None,
+) -> dict[str, Any]:
+    """Create a nested Group/Fill/Paint recipe atomically, rolling back on failure."""
+    return operations.create_layer_recipe(recipe, texture_set)
+
+
+@mcp.tool()
 def set_fill_base_color(uid: int, color: list[float]) -> dict[str, Any]:
     """Set a Fill Layer's base color using its UID and sRGB [r,g,b] values."""
     return operations.set_fill_base_color(uid, color)
@@ -100,9 +121,26 @@ def set_fill_channels(
 
 
 @mcp.tool()
+def set_active_channels(uid: int, channels: list[str]) -> dict[str, Any]:
+    """Replace a Fill or Paint layer's active channel set by UID."""
+    return operations.set_active_channels(uid, channels)
+
+
+@mcp.tool()
 def set_layer_mask(uid: int, enabled: bool, background: str = "Black") -> dict[str, Any]:
     """Add/update or remove a layer mask; backgrounds are reported by get_capabilities."""
     return operations.set_layer_mask(uid, enabled, background)
+
+
+@mcp.tool()
+def insert_mask_effect(
+    uid: int,
+    effect_type: str,
+    resource_url: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Insert Fill, Paint, Generator, Filter, Levels, Anchor, or Smart Mask content."""
+    return operations.insert_mask_effect(uid, effect_type, resource_url, name)
 
 
 @mcp.tool()
@@ -133,6 +171,21 @@ def select_layers(uids: list[int]) -> dict[str, Any]:
 def list_export_presets() -> dict[str, Any]:
     """List built-in and shelf export presets without exporting files."""
     return operations.list_export_presets()
+
+
+@mcp.tool()
+def inspect_export_preset(
+    preset: str,
+    texture_set: str | None = None,
+) -> dict[str, Any]:
+    """Resolve an export preset and preview its map names without writing files."""
+    return operations.inspect_export_preset(preset, texture_set)
+
+
+@mcp.tool()
+def list_export_profiles() -> dict[str, Any]:
+    """List curated engine export profiles and whether their Painter presets are available."""
+    return operations.list_export_profiles()
 
 
 @mcp.tool()
@@ -173,15 +226,89 @@ def export_textures(
 
 
 @mcp.tool()
+def plan_profile_export(
+    output_directory: str,
+    profile: str,
+    texture_sets: list[str] | None = None,
+    size_log2: int | None = None,
+) -> dict[str, Any]:
+    """Preview an engine-profile texture export without writing files."""
+    return operations.plan_profile_export(output_directory, profile, texture_sets, size_log2)
+
+
+@mcp.tool()
+def export_with_profile(
+    output_directory: str,
+    profile: str,
+    texture_sets: list[str] | None = None,
+    size_log2: int | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Run a curated export profile inside SP_MCP_EXPORT_ROOTS and verify outputs."""
+    return operations.export_with_profile(
+        output_directory, profile, texture_sets, size_log2, overwrite
+    )
+
+
+@mcp.tool()
 def list_project_resources() -> dict[str, Any]:
     """List resources referenced by the open project."""
     return operations.list_project_resources()
 
 
 @mcp.tool()
-def search_resources(query: str, limit: int = 50) -> dict[str, Any]:
+def search_resources(
+    query: str,
+    limit: int = 50,
+    resource_type: str | None = None,
+    usage: str | None = None,
+) -> dict[str, Any]:
     """Search Painter resources and return identifiers, type, category, and usages."""
-    return operations.search_resources(query, limit)
+    return operations.search_resources(query, limit, resource_type, usage)
+
+
+@mcp.tool()
+def find_outdated_resources() -> dict[str, Any]:
+    """Plan project-resource replacements without modifying the project."""
+    return operations.find_outdated_resources()
+
+
+@mcp.tool()
+def replace_outdated_resources(confirm: bool = False) -> dict[str, Any]:
+    """Atomically replace all outdated resources after explicit confirm=true."""
+    return operations.replace_outdated_resources(confirm)
+
+
+@mcp.tool()
+def save_project_copy(
+    output_path: str,
+    mode: str = "Incremental",
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Save a verified .spp copy inside SP_MCP_PROJECT_ROOTS without relocating the project."""
+    return operations.save_project_copy(output_path, mode, overwrite)
+
+
+@mcp.tool()
+def export_smart_material(
+    uid: int,
+    name: str,
+    output_directory: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Export a group as a verified Smart Material inside SP_MCP_EXPORT_ROOTS."""
+    return operations.export_smart_material(uid, name, output_directory, overwrite)
+
+
+@mcp.tool()
+def export_smart_mask(
+    uid: int,
+    name: str,
+    output_directory: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Export a layer mask as a verified Smart Mask inside SP_MCP_EXPORT_ROOTS."""
+    return operations.export_smart_mask(uid, name, output_directory, overwrite)
 
 
 @mcp.tool()

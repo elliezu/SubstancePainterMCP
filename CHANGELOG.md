@@ -2,6 +2,58 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.0 - 2026-07-28
+
+Version 0.3.0 expands the server from 22 to 36 MCP tools and completes most deterministic P1/P2 automation that can be safely verified without subjective visual review.
+
+### Transactional layer automation
+
+- Added `create_layer_recipe` for nested Group, Fill, and Paint structures.
+- Added preflight schema, color, nesting-depth, and node-type validation.
+- Added in-Painter transaction rollback: every node created by a failed recipe is removed before the error is returned.
+- Preserved declared layer order when inserting at the top of a Texture Set or group.
+- Added optional visibility, active-channel, Fill-channel, base-color, and mask configuration to recipe nodes.
+- Added `set_active_channels` with OpenPBR aliases for Roughness, Metallic, and Emission.
+
+### Masks, effects, and snapshots
+
+- Added `insert_mask_effect` for Fill, Paint, Generator, Filter, Levels, Anchor, and Smart Mask content.
+- Added resource-URL validation before resource-backed effects are inserted.
+- Added `snapshot_layer_tree`, including masks, mask effects, content effects, active channels, group state, and a deterministic SHA-256 digest.
+- Used snapshot equality to verify both failed-recipe rollback and final live-test cleanup.
+
+### Resources and baking inspection
+
+- Added server-side `resource_type` and `usage` filters to `search_resources`.
+- Isolated malformed legacy shelf usage metadata so one incompatible resource no longer aborts a complete search.
+- Added `find_outdated_resources` and explicit `confirm=true` gating for Painter's atomic `replace_project_resources` operation.
+- Added read-only `inspect_baking` output for Texture Set enablement, bakers, UV tiles, mesh-map resources, and curvature mode.
+
+### Export workflows and backups
+
+- Added read-only `inspect_export_preset` with per-Texture-Set map-name previews.
+- Added curated `generic-pbr`, `vrchat-pbr`, `blender`, `unity-hdrp`, `unity-urp`, and `unreal-engine` profiles.
+- Added `plan_profile_export` and `export_with_profile` on top of the existing approved-root and overwrite gates.
+- Added verified Smart Material (`.spsm`) and Smart Mask (`.spmsk`) file exports.
+- Added `save_project_copy` using Painter's non-relocating `save_as_copy` API.
+- Added independent `SP_MCP_PROJECT_ROOTS`, `.spp` extension validation, overwrite protection, output size verification, and current-project path verification.
+
+### Validation
+
+- Expanded the automated suite from 16 to 27 tests, including FastMCP schema registration for all 36 tools.
+- Added `scripts/live_features.py` for repeatable transactional and file-output testing.
+- Live-validated nested recipe creation and cleanup, multi-node failure rollback, OpenPBR active channels, Levels/Anchor/Generator mask effects, filtered resource search, and baking inspection.
+- Exported and verified a 36,271-byte Smart Material and a 33,865-byte Smart Mask.
+- Exported and verified 18 texture files across three UDIM Texture Sets using the generic PBR profile.
+- Saved and verified a 951,014,813-byte project copy while confirming that Painter kept the original project path.
+- Removed all temporary Painter layers and generated validation artifacts after the run.
+
+### Intentionally deferred
+
+- Existing-layer movement remains deferred because Painter exposes insertion positions but no confirmed lossless move primitive.
+- Bake execution, progress, and cancellation remain deferred until an event bridge can reliably map Painter's asynchronous lifecycle onto MCP progress without orphaning jobs.
+- Project creation and mesh reload remain deferred until automatic pre-operation backups and post-operation Texture Set diffs are implemented together.
+
 ## 0.2.0 - 2026-07-28
 
 Version 0.2.0 modernizes the original MCP proof of concept into an installable, tested, and safety-gated server for current Substance 3D Painter workflows.

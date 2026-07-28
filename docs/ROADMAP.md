@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0
+### Completed in 0.2.0-0.3.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -25,6 +25,12 @@ These features can be created, verified, and cleaned up in a sample project with
 - Export-preset, project-resource, and resource-query inspection.
 - Runtime capability detection.
 - Approved-root texture export with a read-only plan and output-file verification.
+- Transactional nested layer recipes with automatic rollback.
+- Active-channel replacement with OpenPBR aliases.
+- Fill, Paint, Generator, Filter, Levels, Anchor, and Smart Mask insertion in masks.
+- Detailed layer/effect snapshots with deterministic SHA-256 digests.
+- Server-side resource type/usage filtering with malformed legacy metadata isolation.
+- Export-preset inspection and outdated-resource replacement planning.
 
 ### Layer structure and recipes
 
@@ -32,21 +38,20 @@ These features can be created, verified, and cleaned up in a sample project with
   - Support `above`, `below`, `inside`, and `top` only when Painter exposes a lossless public API.
   - Verify parent and ordering before and after the operation.
 - `create_layer_recipe(recipe)`
-  - Create Group, Fill, and Paint nodes as one transaction.
-  - Roll back every created node if any step fails.
-- `set_active_channels(uid, channels)`.
-- Insert Fill, Generator, and Filter effects into mask content.
+  - Completed in 0.3.0 with nested Group, Fill, and Paint nodes plus rollback.
+- `set_active_channels(uid, channels)` completed in 0.3.0.
+- Mask-content effects completed in 0.3.0.
 
 ### Project inspection
 
 - `snapshot_layer_tree`
-  - Produce stable JSON snapshots suitable for before/after diffs.
+  - Completed in 0.3.0 with stable JSON and a SHA-256 digest.
 
 ### Resources and presets
 
-- Add server-side type and usage filters to `search_resources`.
-- `inspect_export_preset(preset, texture_set)`.
-- `find_outdated_resources` plus an explicit replacement plan.
+- Completed: server-side type and usage filters for `search_resources`.
+- Completed: `inspect_export_preset(preset, texture_set)`.
+- Completed: `find_outdated_resources` and confirmed atomic replacement.
 
 ## P2 - Sandboxed file operations
 
@@ -55,18 +60,18 @@ These operations require approved output locations and result verification, but 
 ### Texture export
 
 - Completed: `plan_texture_export`, `export_textures`, approved-root checks, overwrite protection, and generated-file size verification.
-- Add curated export profiles for VRChat, Unity, Unreal Engine, and Blender.
+- Completed in 0.3.0: curated VRChat, Unity, Unreal Engine, Blender, and generic PBR profiles.
 
 ### Project saving and backups
 
-- Prefer `save_project_copy(path)`.
+- Completed: `save_project_copy(path)` with an independent approved-root sandbox.
 - Allow overwriting the current project through `save_project` only after an explicit request.
-- Optionally create a backup before applying a layer recipe.
+- Next: optionally create a backup before applying a layer recipe.
 
 ### Smart Materials and Smart Masks
 
-- Export a selected group as a Smart Material or Smart Mask.
-- Verify the generated file and confirm that Painter can rediscover it.
+- Completed: export a selected group or mask as verified `.spsm` / `.spmsk` files.
+- Next: confirm that Painter can rediscover a generated file in a configured shelf.
 
 ## P3 - Long-running jobs and event bridging
 
@@ -74,7 +79,7 @@ Painter's asynchronous APIs need to be connected to MCP progress and cancellatio
 
 ### Baking
 
-- Inspect baker and mesh-map state for selected Texture Sets.
+- Completed read-only inspection of baker enablement, UV tiles, mesh-map assignments, and curvature mode.
 - Validate bake settings before starting.
 - Stream progress from `bake_selected_textures_async`.
 - Investigate Painter 12.1 Auto Rebake and Skew Map capabilities.
