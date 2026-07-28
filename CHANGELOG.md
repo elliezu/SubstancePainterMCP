@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.4.0 - 2026-07-28
+
+Version 0.4.0 expands the server from 36 to 44 tools and adds safe geometry-aware authoring, preflighted recipe execution, Smart asset application, and Fill projection control.
+
+### Geometry masks and snapshots
+
+- Added `get_geometry_mask` with the current mask type, inclusion/exclusion behavior, enabled elements, and valid mesh/UDIM choices.
+- Added `set_geometry_mask` using Painter's current `GeometryMaskMeshParams` and `GeometryMaskUVTilesParams` APIs instead of deprecated setters.
+- Accepted standard UDIM numbers at the MCP boundary and converted them to Painter UV Tile objects internally.
+- Extended layer snapshots with geometry-mask state.
+- Added `diff_layer_snapshots` to report added, removed, reordered, and property-changed nodes by UID.
+
+### Planned and backed-up recipes
+
+- Added `plan_layer_recipe` for read-only schema validation, Texture Set resolution, OpenPBR channel resolution, node counts, snapshot digest, and backup preflight.
+- Added optional pre-operation `.spp` copies to `create_layer_recipe` through `SP_MCP_PROJECT_ROOTS`.
+- Added post-creation snapshot verification and root-node cleanup if verification itself fails.
+- Added [recipe documentation](docs/RECIPES.md) and a valid [VRChat outfit starter recipe](examples/recipes/vrchat_outfit.json).
+
+### Smart assets and Fill projection
+
+- Added `insert_smart_material` at Texture Set top level or inside an existing group.
+- Added `apply_smart_mask` as a discoverable, transaction-protected Smart Mask operation.
+- Added `get_fill_projection` for projection mode, filtering, wrapping, hardness, and UV transform inspection.
+- Added `set_fill_projection` for Fill, UV, and Triplanar modes with scale, rotation, and offset validation.
+- Restored the previous projection settings if any projection update step fails.
+
+### Validation
+
+- Expanded the automated suite from 27 to 33 tests and verified all 44 FastMCP schemas.
+- Live-tested Mesh geometry masking with `pants_low` and UDIM masking with tile `1001`.
+- Live-tested UV scale/rotation/offset and Triplanar scale/rotation changes.
+- Applied the starter `Aluminium Anodized Red` Smart Material and verified its two generated child layers.
+- Applied the starter `Cavity Rust` Smart Mask and verified its generated Mask Editor effect.
+- Created and verified a 951,014,813-byte pre-recipe project copy while preserving the original project path.
+- Used snapshot diffs to detect five inserted nodes, then verified exact final snapshot restoration after cleanup.
+- Deleted the temporary project backup and all generated validation layers after the run.
+
 ## 0.3.0 - 2026-07-28
 
 Version 0.3.0 expands the server from 22 to 36 MCP tools and completes most deterministic P1/P2 automation that can be safely verified without subjective visual review.

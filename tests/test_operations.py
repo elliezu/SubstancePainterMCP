@@ -99,7 +99,26 @@ def test_active_channels_transports_uid_and_names():
 
 
 def test_layer_recipe_normalizes_scalar_channels():
-    remote = FakeRemote()
+    class RecipeRemote(FakeRemote):
+        def execute_python_json(self, code, params=None):
+            self.calls.append((code, params))
+            if "resolved_channels" in code:
+                return {
+                    "success": True,
+                    "data": {
+                        "texture_set": "Body",
+                        "stack": "Body",
+                        "resolved_channels": {"Roughness": "SpecularRoughness"},
+                    },
+                }
+            if "geometry_mask" in code:
+                return {
+                    "success": True,
+                    "data": {"texture_set": "Body", "stack": "Body", "layers": []},
+                }
+            return {"success": True, "data": {"created_count": 2, "nodes": []}}
+
+    remote = RecipeRemote()
     recipe = [
         {
             "type": "group",
@@ -110,8 +129,60 @@ def test_layer_recipe_normalizes_scalar_channels():
         }
     ]
     PainterOperations(remote).create_layer_recipe(recipe)
-    assert remote.calls[0][1]["recipe"][0]["children"][0]["channels"] == {
+    create_call = next(call for call in remote.calls if "created_nodes" in call[0])
+    assert create_call[1]["recipe"][0]["children"][0]["channels"] == {
         "Roughness": [0.25, 0.25, 0.25]
+    }
+
+
+def test_geometry_mask_validates_element_types_locally():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="mesh-name"):
+        operations.set_geometry_mask(1, "Mesh", [1001])
+    with pytest.raises(ValueError, match="UDIM"):
+        operations.set_geometry_mask(1, "UVTile", ["1001"])
+    with pytest.raises(ValueError, match="Mesh or UVTile"):
+        operations.set_geometry_mask(1, "Polygon", [])
+
+
+def test_fill_projection_validates_supported_transforms_locally():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="mode"):
+        operations.set_fill_projection(1, "Spherical")
+    with pytest.raises(ValueError, match="greater than zero"):
+        operations.set_fill_projection(1, "UV", scale=[1, 0])
+    with pytest.raises(ValueError, match="does not support offset"):
+        operations.set_fill_projection(1, "Triplanar", offset=[0, 0])
+    with pytest.raises(ValueError, match="does not accept"):
+        operations.set_fill_projection(1, "Fill", rotation=10)
+
+
+def test_smart_material_requires_resource_url():
+    with pytest.raises(ValueError, match="resource://"):
+        PainterOperations(FakeRemote()).insert_smart_material("https://example.com/material")
+
+
+def test_snapshot_diff_reports_added_removed_and_changed_nodes():
+    operations = PainterOperations(FakeRemote())
+    before = {
+        "sha256": "before",
+        "layers": [
+            {"uid": 1, "name": "Keep", "type": "FillLayerNode", "visible": True},
+            {"uid": 2, "name": "Remove", "type": "PaintLayerNode", "visible": True},
+        ],
+    }
+    after = {
+        "sha256": "after",
+        "layers": [
+            {"uid": 1, "name": "Keep", "type": "FillLayerNode", "visible": False},
+            {"uid": 3, "name": "Add", "type": "GroupLayerNode", "visible": True},
+        ],
+    }
+    result = operations.diff_layer_snapshots(before, after)
+    assert result["counts"] == {"added": 1, "removed": 1, "changed": 1}
+    assert result["changed"][0]["fields"]["visible"] == {
+        "before": True,
+        "after": False,
     }
 
 
@@ -121,6 +192,54 @@ def test_layer_recipe_rejects_children_on_non_group():
     ]
     with pytest.raises(ValueError, match="only group"):
         PainterOperations(FakeRemote()).create_layer_recipe(recipe)
+
+
+def test_recipe_rolls_back_root_when_post_verification_fails():
+    class FailingVerificationRemote(FakeRemote):
+        def execute_python_json(self, code, params=None):
+            self.calls.append((code, params))
+            if "resolved_channels" in code:
+                return {
+                    "success": True,
+                    "data": {
+                        "texture_set": "Body",
+                        "stack": "Body",
+                        "resolved_channels": {},
+                    },
+                }
+            snapshot_calls = sum("geometry_mask" in call[0] for call in self.calls)
+            if "geometry_mask" in code and snapshot_calls == 1:
+                return {
+                    "success": True,
+                    "data": {"texture_set": "Body", "stack": "Body", "layers": []},
+                }
+            if "geometry_mask" in code:
+                raise RuntimeError("snapshot failed")
+            if "created_nodes" in code:
+                return {
+                    "success": True,
+                    "data": {
+                        "created_count": 1,
+                        "nodes": [{"uid": 99, "name": "Temporary", "type": "GroupLayerNode"}],
+                    },
+                }
+            return {"success": True, "data": {"uid": 99}}
+
+    remote = FailingVerificationRemote()
+    with pytest.raises(RuntimeError, match="snapshot failed"):
+        PainterOperations(remote).create_layer_recipe(
+            [{"type": "group", "name": "Temporary"}]
+        )
+    assert any("delete_node" in code and params == {"uid": 99} for code, params in remote.calls)
+
+
+def test_recipe_backup_requires_configured_project_root(monkeypatch, tmp_path):
+    monkeypatch.delenv("SP_MCP_PROJECT_ROOTS", raising=False)
+    with pytest.raises(PermissionError, match="disabled"):
+        PainterOperations(FakeRemote()).plan_layer_recipe(
+            [{"type": "group", "name": "Safe"}],
+            backup_path=str(tmp_path / "safe.spp"),
+        )
 
 
 def test_snapshot_adds_deterministic_digest():

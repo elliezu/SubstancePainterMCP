@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0-0.3.0
+### Completed in 0.2.0-0.4.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -31,6 +31,10 @@ These features can be created, verified, and cleaned up in a sample project with
 - Detailed layer/effect snapshots with deterministic SHA-256 digests.
 - Server-side resource type/usage filtering with malformed legacy metadata isolation.
 - Export-preset inspection and outdated-resource replacement planning.
+- Current Geometry Mask inspection and Mesh/UDIM inclusion/exclusion editing.
+- Mutation-free recipe planning, optional pre-operation backup, and snapshot diffs.
+- Smart Material and Smart Mask application from validated resource URLs.
+- UV and Triplanar Fill projection transforms with failure rollback.
 
 ### Layer structure and recipes
 
@@ -38,14 +42,14 @@ These features can be created, verified, and cleaned up in a sample project with
   - Support `above`, `below`, `inside`, and `top` only when Painter exposes a lossless public API.
   - Verify parent and ordering before and after the operation.
 - `create_layer_recipe(recipe)`
-  - Completed in 0.3.0 with nested Group, Fill, and Paint nodes plus rollback.
+  - Completed through 0.4.0 with planning, nested nodes, rollback, snapshot verification, and optional backup.
 - `set_active_channels(uid, channels)` completed in 0.3.0.
 - Mask-content effects completed in 0.3.0.
 
 ### Project inspection
 
 - `snapshot_layer_tree`
-  - Completed in 0.3.0 with stable JSON and a SHA-256 digest.
+  - Completed through 0.4.0 with geometry state, stable JSON, SHA-256, and UID-based diffs.
 
 ### Resources and presets
 
@@ -66,12 +70,19 @@ These operations require approved output locations and result verification, but 
 
 - Completed: `save_project_copy(path)` with an independent approved-root sandbox.
 - Allow overwriting the current project through `save_project` only after an explicit request.
-- Next: optionally create a backup before applying a layer recipe.
+- Completed in 0.4.0: optional backup before applying a layer recipe.
 
 ### Smart Materials and Smart Masks
 
 - Completed: export a selected group or mask as verified `.spsm` / `.spmsk` files.
+- Completed in 0.4.0: apply shelf Smart Materials and Smart Masks transactionally.
 - Next: confirm that Painter can rediscover a generated file in a configured shelf.
+
+### Fill sources and projections
+
+- Completed in 0.4.0: inspect projections and set Fill, UV, or Triplanar transforms.
+- Next: connect bitmap/material resources as Fill sources with usage validation.
+- Next: expose advanced Planar, Spherical, and Cylindrical projection parameters.
 
 ## P3 - Long-running jobs and event bridging
 

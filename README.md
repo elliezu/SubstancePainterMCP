@@ -7,7 +7,7 @@
 
 An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-Version **0.3.0** provides 36 focused MCP tools, transactional layer recipes, detailed layer snapshots, mask effects, baking inspection, filtered resource search, curated engine exports, verified Smart Material/Mask output, and sandboxed project backups. It remains live-validated against **Substance 3D Painter 12.1.1**.
+Version **0.4.0** provides 44 focused MCP tools, Mesh/UDIM geometry masks, dry-run recipe planning with automatic backups, snapshot diffs, Smart Material/Mask application, and transactional UV/Triplanar Fill projection controls. It remains live-validated against **Substance 3D Painter 12.1.1**.
 
 > This is an independent community project and is not affiliated with or endorsed by Adobe.
 
@@ -16,8 +16,11 @@ Version **0.3.0** provides 36 focused MCP tools, transactional layer recipes, de
 - Inspect the open project, Texture Sets, channels, resources, export presets, and complete layer tree.
 - Create and edit Fill, Paint, and Group layers through stable layer UIDs.
 - Build nested layer recipes atomically and roll back every created node if a step fails.
+- Plan recipe scope and channel resolution without mutation, optionally creating an approved `.spp` backup before execution.
 - Set OpenPBR-aware Fill channels, masks, visibility, opacity, blend modes, names, and selection.
+- Control Mesh or UDIM geometry masks and compare detailed layer snapshots by UID.
 - Insert Fill, Paint, Generator, Filter, Levels, Anchor, and Smart Mask effects into mask stacks.
+- Apply shelf Smart Materials/Masks and configure UV or Triplanar Fill transforms.
 - Audit project structure and search layers or resources without mutating the project.
 - Preview exact export paths before writing and restrict exports to explicitly allowed directories.
 - Save verified project copies without changing the current project's location.
@@ -51,6 +54,8 @@ Painter builds may expose newer features while reporting an older API version st
 | `list_layers` | Return a recursive UID-based layer tree. |
 | `find_layers` | Search by name, type, or visibility and include parent paths. |
 | `snapshot_layer_tree` | Capture layers, masks, effects, active channels, and a deterministic digest. |
+| `diff_layer_snapshots` | Compare snapshots by UID and report added, removed, or changed nodes. |
+| `get_geometry_mask` | Inspect Mesh/UDIM mask state and available geometry elements. |
 | `list_export_presets` | List built-in and shelf export presets. |
 | `inspect_export_preset` | Resolve a preset and preview its exact map names without writing. |
 | `list_export_profiles` | List curated VRChat, Blender, Unity, Unreal, and generic profiles. |
@@ -65,9 +70,15 @@ Painter builds may expose newer features while reporting an older API version st
 | `create_fill_layer` | Create a Fill layer with an optional base color. |
 | `create_paint_layer` | Create a Paint layer. |
 | `create_group` | Create a layer group. |
-| `create_layer_recipe` | Create nested Group/Fill/Paint structures atomically with rollback. |
+| `plan_layer_recipe` | Validate a recipe, resolve channels, and preview backup/mutation scope. |
+| `create_layer_recipe` | Create nested structures atomically, optionally after an `.spp` backup. |
+| `set_geometry_mask` | Apply inclusion/exclusion masks using mesh names or UDIM numbers. |
+| `insert_smart_material` | Apply a Smart Material at stack top or inside a group. |
+| `apply_smart_mask` | Apply a Smart Mask with transactional cleanup on failure. |
 | `set_fill_base_color` | Convert an sRGB input color into Painter's working color space. |
 | `set_fill_channels` | Set multiple uniform channels, including Roughness, Metallic, and Emission aliases. |
+| `get_fill_projection` | Inspect Fill projection mode and common UV transforms. |
+| `set_fill_projection` | Set Fill, UV, or Triplanar projection and transforms transactionally. |
 | `set_active_channels` | Replace a Fill or Paint layer's active channel set. |
 | `set_layer_mask` | Add, replace, or remove a White/Black mask. |
 | `insert_mask_effect` | Insert procedural or paint effects into a layer's mask stack. |
@@ -201,13 +212,18 @@ With Painter running and a disposable project open, use the live smoke test:
 # Full v0.3 transaction, mask-effect, Smart asset, export, and backup validation
 .venv\Scripts\python.exe scripts\live_features.py `
   --output-root D:\SubstanceMCPTest --texture-export --project-copy
+
+# v0.4 geometry, recipe backup, projection, and Smart asset application
+.venv\Scripts\python.exe scripts\live_v04.py `
+  --output-root D:\SubstanceMCPTest --project-copy
 ```
 
-The 0.3.0 validation run used Painter 12.1.1 and a saved test project with three UDIM Texture Sets. It verified all 36 FastMCP tool schemas, multi-node recipe rollback by comparing pre/post SHA-256 snapshots, nested layer creation, OpenPBR channel aliases, mask Levels/Anchor/Generator insertion, filtered generator search, preset map inspection, `.spsm` and `.spmsk` export, 18 guarded 256 px PNG texture outputs, and a verified 951 MB `.spp` copy. The original project path remained unchanged, all temporary layers were removed, and test artifacts were deleted after verification.
+The 0.4.0 validation run used Painter 12.1.1 and a saved three-UDIM test project. It verified all 44 FastMCP tool schemas, a mutation-free recipe plan, a verified 951 MB pre-recipe backup, Mesh and UDIM geometry-mask changes, UV and Triplanar transforms, Smart Material application with nested layers, Smart Mask application with its Generator, snapshot diff output, and exact final snapshot restoration. The original project path remained unchanged and all generated layers and test files were removed after verification.
 
 ## Roadmap and release notes
 
-- See [CHANGELOG.md](CHANGELOG.md) for detailed 0.3.0 and 0.2.0 release notes.
+- See [docs/RECIPES.md](docs/RECIPES.md) and the [VRChat outfit starter recipe](examples/recipes/vrchat_outfit.json) for transaction examples.
+- See [CHANGELOG.md](CHANGELOG.md) for detailed 0.4.0, 0.3.0, and 0.2.0 release notes.
 - See [docs/ROADMAP.md](docs/ROADMAP.md) for planned layer recipes, snapshots, backups, engine-specific export profiles, async baking, and Blender round-trip workflows.
 
 ## License

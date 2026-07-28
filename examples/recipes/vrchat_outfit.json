@@ -1,0 +1,62 @@
+[
+  {
+    "type": "group",
+    "name": "00_BASE",
+    "children": [
+      {
+        "type": "fill",
+        "name": "Base Material",
+        "base_color": [0.5, 0.5, 0.5],
+        "channels": {
+          "Roughness": 0.5,
+          "Metallic": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "type": "group",
+    "name": "10_COLOR_VARIATION",
+    "children": [
+      {
+        "type": "fill",
+        "name": "Color Variation",
+        "base_color": [0.2, 0.3, 0.5],
+        "mask": {
+          "background": "Black",
+          "enabled": true
+        }
+      }
+    ]
+  },
+  {
+    "type": "group",
+    "name": "20_ROUGHNESS",
+    "children": [
+      {
+        "type": "fill",
+        "name": "Roughness Control",
+        "channels": {
+          "Roughness": 0.4
+        },
+        "active_channels": [
+          "Roughness"
+        ]
+      }
+    ]
+  },
+  {
+    "type": "group",
+    "name": "30_DETAILS",
+    "children": [
+      {
+        "type": "paint",
+        "name": "Hand Painted Details",
+        "active_channels": [
+          "BaseColor",
+          "Roughness"
+        ]
+      }
+    ]
+  }
+]

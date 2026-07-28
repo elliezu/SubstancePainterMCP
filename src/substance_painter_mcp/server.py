@@ -75,6 +75,32 @@ def snapshot_layer_tree(texture_set: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+def diff_layer_snapshots(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare two layer snapshots by UID and report added, removed, and changed nodes."""
+    return operations.diff_layer_snapshots(before, after)
+
+
+@mcp.tool()
+def get_geometry_mask(uid: int) -> dict[str, Any]:
+    """Inspect a layer's Mesh/UVTile geometry mask and available elements."""
+    return operations.get_geometry_mask(uid)
+
+
+@mcp.tool()
+def set_geometry_mask(
+    uid: int,
+    mask_type: str,
+    elements: list[str | int],
+    inclusion_list: bool = True,
+) -> dict[str, Any]:
+    """Set a geometry mask using mesh names or standard UDIM numbers."""
+    return operations.set_geometry_mask(uid, mask_type, elements, inclusion_list)
+
+
+@mcp.tool()
 def create_fill_layer(
     name: str,
     texture_set: str | None = None,
@@ -97,18 +123,72 @@ def create_paint_layer(name: str, texture_set: str | None = None) -> dict[str, A
 
 
 @mcp.tool()
+def plan_layer_recipe(
+    recipe: list[dict[str, Any]],
+    texture_set: str | None = None,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Validate a recipe, resolve channels, and preview backup/mutation scope without editing."""
+    return operations.plan_layer_recipe(
+        recipe, texture_set, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
 def create_layer_recipe(
     recipe: list[dict[str, Any]],
     texture_set: str | None = None,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
 ) -> dict[str, Any]:
-    """Create a nested Group/Fill/Paint recipe atomically, rolling back on failure."""
-    return operations.create_layer_recipe(recipe, texture_set)
+    """Create a nested recipe atomically, optionally saving an approved .spp backup first."""
+    return operations.create_layer_recipe(
+        recipe, texture_set, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
+def insert_smart_material(
+    resource_url: str,
+    texture_set: str | None = None,
+    parent_uid: int | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Insert a Smart Material resource at stack top or inside a group."""
+    return operations.insert_smart_material(resource_url, texture_set, parent_uid, name)
+
+
+@mcp.tool()
+def apply_smart_mask(uid: int, resource_url: str) -> dict[str, Any]:
+    """Apply a Smart Mask resource to a layer using transactional mask insertion."""
+    return operations.apply_smart_mask(uid, resource_url)
 
 
 @mcp.tool()
 def set_fill_base_color(uid: int, color: list[float]) -> dict[str, Any]:
     """Set a Fill Layer's base color using its UID and sRGB [r,g,b] values."""
     return operations.set_fill_base_color(uid, color)
+
+
+@mcp.tool()
+def get_fill_projection(uid: int) -> dict[str, Any]:
+    """Inspect a Fill layer's projection mode and common UV transformation."""
+    return operations.get_fill_projection(uid)
+
+
+@mcp.tool()
+def set_fill_projection(
+    uid: int,
+    mode: str,
+    scale: list[float] | None = None,
+    rotation: float | None = None,
+    offset: list[float] | None = None,
+) -> dict[str, Any]:
+    """Set Fill, UV, or Triplanar projection with transactional transform updates."""
+    return operations.set_fill_projection(uid, mode, scale, rotation, offset)
 
 
 @mcp.tool()

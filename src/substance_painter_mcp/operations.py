@@ -111,6 +111,8 @@ result = {
     "blending_modes": list(layerstack.BlendingMode.__members__),
     "channel_types": list(textureset.ChannelType.__members__),
     "mask_backgrounds": list(layerstack.MaskBackground.__members__),
+    "geometry_mask_types": list(layerstack.GeometryMaskType.__members__),
+    "projection_modes": list(layerstack.ProjectionMode.__members__),
     "insert_positions": [name for name in ("above_node", "below_node", "inside_node")
                          if hasattr(layerstack.InsertPosition, name)],
     "features": {
@@ -118,6 +120,8 @@ result = {
         "smart_material_file_export": hasattr(layerstack, "export_as_smart_material"),
         "smart_mask_file_export": hasattr(layerstack, "export_as_smart_mask"),
         "mask_effect_insertion": hasattr(layerstack, "insert_generator_effect"),
+        "smart_material_insertion": hasattr(layerstack, "insert_smart_material"),
+        "smart_mask_insertion": hasattr(layerstack, "insert_smart_mask"),
         "predefined_export_presets": hasattr(export, "list_predefined_export_presets"),
         "async_baking": hasattr(baking, "bake_selected_textures_async"),
         "auto_unwrap_settings": hasattr(project, "AutoUnwrapUVTilesSettings"),
@@ -317,6 +321,22 @@ def effect_info(effect):
     }
 
 def describe(node):
+    geometry = node.get_geometry_mask()
+    geometry_type = type(geometry).__name__
+    if isinstance(geometry, layerstack.GeometryMaskMeshParams):
+        geometry_mask = {
+            "type": "Mesh",
+            "inclusion_list": geometry.inclusion_list,
+            "elements": list(geometry.meshes),
+        }
+    elif isinstance(geometry, layerstack.GeometryMaskUVTilesParams):
+        geometry_mask = {
+            "type": "UVTile",
+            "inclusion_list": geometry.inclusion_list,
+            "elements": [1001 + tile.u + 10 * tile.v for tile in geometry.uv_tiles],
+        }
+    else:
+        geometry_mask = {"type": geometry_type, "inclusion_list": None, "elements": []}
     item = {
         "uid": node.uid(),
         "name": node.get_name(),
@@ -329,6 +349,7 @@ def describe(node):
             "effects": [effect_info(effect) for effect in node.mask_effects()] if node.has_mask() else [],
         },
         "content_effects": [effect_info(effect) for effect in node.content_effects()],
+        "geometry_mask": geometry_mask,
     }
     if isinstance(node, layerstack.FillLayerNode):
         item["active_channels"] = sorted(channel.name for channel in node.active_channels)
@@ -352,6 +373,145 @@ result = {
         return {
             **snapshot,
             "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        }
+
+    def get_geometry_mask(self, uid: int) -> dict[str, Any]:
+        code = '''
+import substance_painter.layerstack as layerstack
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.LayerNode):
+    raise TypeError(f"Node {params['uid']} does not support a geometry mask")
+texture_set = node.get_texture_set()
+current = node.get_geometry_mask()
+if isinstance(current, layerstack.GeometryMaskMeshParams):
+    mask_type = "Mesh"
+    elements = list(current.meshes)
+elif isinstance(current, layerstack.GeometryMaskUVTilesParams):
+    mask_type = "UVTile"
+    elements = [1001 + tile.u + 10 * tile.v for tile in current.uv_tiles]
+else:
+    mask_type = type(current).__name__
+    elements = []
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "type": mask_type,
+    "inclusion_list": current.inclusion_list,
+    "elements": elements,
+    "available_meshes": list(texture_set.all_mesh_names()),
+    "available_uv_tiles": [1001 + tile.u + 10 * tile.v for tile in texture_set.all_uv_tiles()],
+}
+'''
+        return _unwrap(self.remote.execute_python_json(code, {"uid": uid}))
+
+    def set_geometry_mask(
+        self,
+        uid: int,
+        mask_type: str,
+        elements: list[str | int],
+        inclusion_list: bool = True,
+    ) -> dict[str, Any]:
+        normalized = mask_type.casefold()
+        if normalized not in {"mesh", "uvtile", "uv_tile"}:
+            raise ValueError("mask_type must be Mesh or UVTile")
+        if not isinstance(elements, list):
+            raise ValueError("elements must be a list")
+        if normalized == "mesh" and any(not isinstance(value, str) for value in elements):
+            raise ValueError("Mesh geometry mask elements must be mesh-name strings")
+        if normalized != "mesh" and any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 1001
+            for value in elements
+        ):
+            raise ValueError("UVTile geometry mask elements must be UDIM integers >= 1001")
+        code = '''
+import substance_painter.layerstack as layerstack
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.LayerNode):
+    raise TypeError(f"Node {params['uid']} does not support a geometry mask")
+texture_set = node.get_texture_set()
+if params["mask_type"] == "mesh":
+    available = set(texture_set.all_mesh_names())
+    missing = [name for name in params["elements"] if name not in available]
+    if missing:
+        raise ValueError(f"Unknown mesh names: {missing}")
+    settings = layerstack.GeometryMaskMeshParams(
+        inclusion_list=params["inclusion_list"], meshes=params["elements"]
+    )
+else:
+    available = {1001 + tile.u + 10 * tile.v: tile for tile in texture_set.all_uv_tiles()}
+    missing = [udim for udim in params["elements"] if udim not in available]
+    if missing:
+        raise ValueError(f"Unknown UV tiles: {missing}")
+    settings = layerstack.GeometryMaskUVTilesParams(
+        inclusion_list=params["inclusion_list"],
+        uv_tiles=[available[udim] for udim in params["elements"]],
+    )
+node.set_geometry_mask(settings)
+current = node.get_geometry_mask()
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "type": "Mesh" if isinstance(current, layerstack.GeometryMaskMeshParams) else "UVTile",
+    "inclusion_list": current.inclusion_list,
+    "elements": (list(current.meshes)
+                 if isinstance(current, layerstack.GeometryMaskMeshParams)
+                 else [1001 + tile.u + 10 * tile.v for tile in current.uv_tiles]),
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "uid": uid,
+                    "mask_type": "mesh" if normalized == "mesh" else "uvtile",
+                    "elements": elements,
+                    "inclusion_list": inclusion_list,
+                },
+            )
+        )
+
+    def diff_layer_snapshots(
+        self,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> dict[str, Any]:
+        def flatten(snapshot: dict[str, Any]) -> dict[int, dict[str, Any]]:
+            result: dict[int, dict[str, Any]] = {}
+
+            def visit(nodes: list[dict[str, Any]], parents: list[str]) -> None:
+                for index, node in enumerate(nodes):
+                    clean = {key: value for key, value in node.items() if key != "children"}
+                    clean["parents"] = parents
+                    clean["index"] = index
+                    result[int(node["uid"])] = clean
+                    visit(node.get("children", []), [*parents, node["name"]])
+
+            visit(snapshot.get("layers", []), [])
+            return result
+
+        old = flatten(before)
+        new = flatten(after)
+        added = [new[uid] for uid in sorted(new.keys() - old.keys())]
+        removed = [old[uid] for uid in sorted(old.keys() - new.keys())]
+        changed = []
+        for uid in sorted(old.keys() & new.keys()):
+            fields = {
+                key: {"before": old[uid].get(key), "after": new[uid].get(key)}
+                for key in sorted(old[uid].keys() | new[uid].keys())
+                if old[uid].get(key) != new[uid].get(key)
+            }
+            if fields:
+                changed.append({"uid": uid, "name": new[uid].get("name"), "fields": fields})
+        return {
+            "before_sha256": before.get("sha256"),
+            "after_sha256": after.get("sha256"),
+            "equal": not added and not removed and not changed,
+            "added": added,
+            "removed": removed,
+            "changed": changed,
+            "counts": {"added": len(added), "removed": len(removed), "changed": len(changed)},
         }
 
     def set_active_channels(self, uid: int, channels: list[str]) -> dict[str, Any]:
@@ -389,12 +549,107 @@ result = {
             self.remote.execute_python_json(code, {"uid": uid, "channels": channels})
         )
 
+    def plan_layer_recipe(
+        self,
+        recipe: list[dict[str, Any]],
+        texture_set: str | None = None,
+        backup_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+    ) -> dict[str, Any]:
+        self._validate_recipe(recipe)
+        normalized = self._normalize_recipe(recipe)
+        if backup_path is not None:
+            backup = self._validate_allowed_path(
+                backup_path, "SP_MCP_PROJECT_ROOTS", "Recipe backup"
+            )
+            if backup.suffix.casefold() != ".spp":
+                raise ValueError("backup_path must use the .spp extension")
+            if backup.exists() and not overwrite_backup:
+                raise FileExistsError(
+                    f"Recipe backup already exists; set overwrite_backup=true: {backup}"
+                )
+        if backup_mode not in {"Incremental", "Full"}:
+            raise ValueError("backup_mode must be Incremental or Full")
+        code = '''
+import substance_painter.textureset as textureset
+
+stack = (textureset.TextureSet.from_name(params["texture_set"]).get_stack()
+         if params.get("texture_set") else textureset.get_active_stack())
+aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+channels = sorted({
+    name
+    for item in params["flat"]
+    for name in (list(item.get("channels", {}))
+                 + list(item.get("active_channels", []))
+                 + (["BaseColor"] if item.get("base_color") is not None else []))
+})
+resolved = {}
+for name in channels:
+    canonical = name if name in textureset.ChannelType.__members__ else aliases.get(name)
+    if not canonical or canonical not in textureset.ChannelType.__members__:
+        raise ValueError(f"Unknown channel: {name}")
+    resolved[name] = canonical
+material = stack.material()
+result = {
+    "texture_set": material.name() if callable(material.name) else material.name,
+    "stack": stack.name(),
+    "resolved_channels": resolved,
+}
+'''
+
+        flat: list[dict[str, Any]] = []
+
+        def visit(items: list[dict[str, Any]]) -> None:
+            for item in items:
+                flat.append(item)
+                visit(item.get("children") or [])
+
+        visit(normalized)
+        runtime = _unwrap(
+            self.remote.execute_python_json(
+                code, {"texture_set": texture_set, "flat": flat}
+            )
+        )
+        counts = Counter(str(item["type"]).casefold() for item in flat)
+        current = self.snapshot_layer_tree(texture_set)
+        return {
+            "valid": True,
+            "texture_set": runtime["texture_set"],
+            "stack": runtime["stack"],
+            "node_count": len(flat),
+            "node_types": dict(sorted(counts.items())),
+            "resolved_channels": runtime["resolved_channels"],
+            "backup": {
+                "requested": backup_path is not None,
+                "path": str(Path(backup_path).expanduser().resolve()) if backup_path else None,
+                "mode": backup_mode if backup_path else None,
+                "overwrite": overwrite_backup if backup_path else False,
+            },
+            "before_sha256": current["sha256"],
+            "recipe": normalized,
+        }
+
     def create_layer_recipe(
         self,
         recipe: list[dict[str, Any]],
         texture_set: str | None = None,
+        backup_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
     ) -> dict[str, Any]:
-        self._validate_recipe(recipe)
+        plan = self.plan_layer_recipe(
+            recipe,
+            texture_set,
+            backup_path,
+            backup_mode,
+            overwrite_backup,
+        )
+        backup = None
+        if backup_path is not None:
+            backup = self.save_project_copy(
+                backup_path, mode=backup_mode, overwrite=overwrite_backup
+            )
         code = '''
 import substance_painter.colormanagement as colormanagement
 import substance_painter.layerstack as layerstack
@@ -472,11 +727,24 @@ except Exception:
     raise
 result = {"created_count": len(created_nodes), "nodes": nodes, "rolled_back": False}
 '''
-        return _unwrap(
+        result = _unwrap(
             self.remote.execute_python_json(
                 code, {"recipe": self._normalize_recipe(recipe), "texture_set": texture_set}
             )
         )
+        try:
+            after = self.snapshot_layer_tree(texture_set)
+        except Exception:
+            for node in reversed(result.get("nodes", [])):
+                try:
+                    self.delete_layer(int(node["uid"]))
+                except Exception:
+                    pass
+            raise
+        result["plan"] = {key: value for key, value in plan.items() if key != "recipe"}
+        result["backup"] = backup
+        result["after_sha256"] = after["sha256"]
+        return result
 
     def insert_mask_effect(
         self,
@@ -619,6 +887,170 @@ result = {"uid": node.uid(), "name": node.get_name(), "type": type(node).__name_
 '''
         return _unwrap(
             self.remote.execute_python_json(code, {"name": name, "texture_set": texture_set})
+        )
+
+    def insert_smart_material(
+        self,
+        resource_url: str,
+        texture_set: str | None = None,
+        parent_uid: int | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        if not resource_url.startswith("resource://"):
+            raise ValueError("resource_url must start with resource://")
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.resource as resource
+import substance_painter.textureset as textureset
+
+stack = (textureset.TextureSet.from_name(params["texture_set"]).get_stack()
+         if params.get("texture_set") else textureset.get_active_stack())
+if params.get("parent_uid") is not None:
+    parent = layerstack.get_node_by_uid(params["parent_uid"])
+    if not isinstance(parent, layerstack.GroupLayerNode):
+        raise TypeError("parent_uid must identify a GroupLayerNode")
+    position = layerstack.InsertPosition.inside_node(parent, layerstack.NodeStack.Substack)
+else:
+    position = layerstack.InsertPosition.from_textureset_stack(stack)
+node = None
+try:
+    resource_id = resource.ResourceID.from_url(params["resource_url"])
+    node = layerstack.insert_smart_material(position, resource_id)
+    if params.get("name"):
+        node.set_name(params["name"])
+except Exception:
+    if node is not None:
+        try:
+            layerstack.delete_node(node)
+        except Exception:
+            pass
+    raise
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "type": type(node).__name__,
+    "resource_url": params["resource_url"],
+    "child_count": len(node.sub_layers()),
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "resource_url": resource_url,
+                    "texture_set": texture_set,
+                    "parent_uid": parent_uid,
+                    "name": name,
+                },
+            )
+        )
+
+    def apply_smart_mask(self, uid: int, resource_url: str) -> dict[str, Any]:
+        return self.insert_mask_effect(uid, "smart_mask", resource_url=resource_url)
+
+    def get_fill_projection(self, uid: int) -> dict[str, Any]:
+        code = '''
+import substance_painter.layerstack as layerstack
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+projection = node.get_projection_parameters()
+transform = getattr(projection, "uv_transformation", None) if projection else None
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "mode": node.get_projection_mode().name,
+    "filtering_mode": getattr(getattr(projection, "filtering_mode", None), "name", None),
+    "uv_wrapping_mode": getattr(getattr(projection, "uv_wrapping_mode", None), "name", None),
+    "hardness": getattr(projection, "hardness", None),
+    "transform": ({
+        "scale_mode": transform.scale_mode.name,
+        "scale": list(transform.scale) if transform.scale is not None else None,
+        "rotation": transform.rotation,
+        "offset": list(transform.offset) if transform.offset is not None else None,
+    } if transform else None),
+}
+'''
+        return _unwrap(self.remote.execute_python_json(code, {"uid": uid}))
+
+    def set_fill_projection(
+        self,
+        uid: int,
+        mode: str,
+        scale: list[float] | None = None,
+        rotation: float | None = None,
+        offset: list[float] | None = None,
+    ) -> dict[str, Any]:
+        if mode not in {"Fill", "UV", "Triplanar"}:
+            raise ValueError("mode must be Fill, UV, or Triplanar")
+        for label, value in (("scale", scale), ("offset", offset)):
+            if value is not None and (
+                len(value) != 2
+                or any(not isinstance(component, (int, float)) for component in value)
+            ):
+                raise ValueError(f"{label} must contain exactly two numbers")
+        if scale is not None and any(value <= 0 for value in scale):
+            raise ValueError("scale components must be greater than zero")
+        if rotation is not None and not isinstance(rotation, (int, float)):
+            raise ValueError("rotation must be a number")
+        if mode == "Fill" and any(value is not None for value in (scale, rotation, offset)):
+            raise ValueError("Fill projection does not accept transform parameters")
+        if mode == "Triplanar" and offset is not None:
+            raise ValueError("Triplanar projection does not support offset")
+        code = '''
+import dataclasses
+import substance_painter.layerstack as layerstack
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+original_mode = node.get_projection_mode()
+original_params = node.get_projection_parameters()
+try:
+    mode = layerstack.ProjectionMode.__members__[params["mode"]]
+    node.set_projection_mode(mode)
+    if mode != layerstack.ProjectionMode.Fill:
+        projection = node.get_projection_parameters()
+        transform = projection.uv_transformation
+        transform = dataclasses.replace(
+            transform,
+            scale=(params["scale"] if params.get("scale") is not None else transform.scale),
+            rotation=(params["rotation"] if params.get("rotation") is not None else transform.rotation),
+            offset=(params["offset"] if params.get("offset") is not None else transform.offset),
+        )
+        node.set_projection_parameters(dataclasses.replace(projection, uv_transformation=transform))
+except Exception:
+    if original_params is not None:
+        node.set_projection_parameters(original_params)
+    else:
+        node.set_projection_mode(original_mode)
+    raise
+projection = node.get_projection_parameters()
+transform = getattr(projection, "uv_transformation", None) if projection else None
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "mode": node.get_projection_mode().name,
+    "transform": ({
+        "scale_mode": transform.scale_mode.name,
+        "scale": list(transform.scale) if transform.scale is not None else None,
+        "rotation": transform.rotation,
+        "offset": list(transform.offset) if transform.offset is not None else None,
+    } if transform else None),
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "uid": uid,
+                    "mode": mode,
+                    "scale": scale,
+                    "rotation": rotation,
+                    "offset": offset,
+                },
+            )
         )
 
     def set_fill_base_color(self, uid: int, color: list[float]) -> dict[str, Any]:
