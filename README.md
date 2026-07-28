@@ -7,7 +7,7 @@
 
 An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-Version **0.6.0** provides 60 focused MCP tools. It adds typed procedural Substance controls, named source presets, Anchor Point bindings, and transactional common/per-baker configuration on top of the asynchronous baking and mesh-reload workflows introduced in 0.5. It remains live-validated against **Substance 3D Painter 12.1.1**.
+Version **0.7.0** provides 65 focused MCP tools. It completes a production-oriented baking workflow with sandboxed high-poly/cage assignment, portable baking presets, multi-Texture-Set preflight, batch execution, cancellation, state restoration, and per-map result manifests. It remains live-validated against **Substance 3D Painter 12.1.1**.
 
 > This is an independent community project and is not affiliated with or endorsed by Adobe.
 
@@ -26,7 +26,8 @@ Version **0.6.0** provides 60 focused MCP tools. It adds typed procedural Substa
 - Discover Anchor Points with owner context and connect them to Fill channels or materials.
 - Configure Planar, Spherical, and Cylindrical projection transforms and culling.
 - Inspect and transactionally configure common baking properties, individual bakers, UV tiles, and linked Texture Set impact.
-- Start, monitor, and cancel asynchronous mesh-map baking.
+- Assign high-poly and cage meshes only from approved roots, then capture or apply portable baking presets.
+- Preflight and batch-bake multiple Texture Sets with optional backup, cancellation, state restoration, and per-map verification.
 - Preflight and monitor mesh reloads while preserving strokes and reporting Texture Set changes.
 - Audit project structure and search layers or resources without mutating the project.
 - Preview exact export paths before writing and restrict exports to explicitly allowed directories.
@@ -59,6 +60,7 @@ Painter builds may expose newer features while reporting an older API version st
 | `audit_project` | Report resolution, channels, layer hygiene, and outdated resources. |
 | `inspect_baking` | Inspect enabled bakers, UV tiles, and mesh-map assignments without baking. |
 | `inspect_baking_parameters` | Inspect typed common properties or one baker, including ranges and enum labels. |
+| `preflight_bake` | Validate project state, mesh inputs, bakers, UV tiles, and expected maps for one or more Texture Sets. |
 | `get_bake_job` | Read progress and terminal status for an asynchronous bake. |
 | `get_mesh_reload_job` | Read completion status and Texture Set changes for a mesh reload. |
 | `list_layers` | Return a recursive UID-based layer tree. |
@@ -122,6 +124,10 @@ Layer names are not unique in Painter. All mutation tools therefore use the UIDs
 | `start_bake` | Start an asynchronous bake after `confirm=true`, optionally creating a project copy first. |
 | `cancel_bake` | Request cooperative cancellation of a running bake job. |
 | `configure_baking` | Transactionally configure Texture Set enablement, bakers, UDIMs, curvature, and typed properties after `confirm=true`. |
+| `set_baking_mesh_inputs` | Assign or clear sandboxed high-poly/cage files, Low as High, and Cage Mode transactionally. |
+| `capture_baking_preset` | Capture portable common, baker, UDIM, curvature, and enablement settings without file-backed values. |
+| `apply_baking_preset` | Validate and transactionally apply a captured baking preset after `confirm=true`. |
+| `start_batch_bake` | Preflight and asynchronously bake multiple Texture Sets with restoration and a per-map result manifest. |
 | `plan_mesh_reload` | Validate an approved mesh path and preview backup/current Texture Set scope. |
 | `start_mesh_reload` | Optionally back up, then asynchronously reload a mesh after `confirm=true`. |
 | `execute_python` | Run arbitrary Painter Python only when explicitly enabled. |
@@ -178,7 +184,8 @@ Example for Claude Desktop on Windows:
         "SP_MCP_TIMEOUT": "120",
         "SP_MCP_EXPORT_ROOTS": "D:\\SubstanceExports",
         "SP_MCP_PROJECT_ROOTS": "D:\\SubstanceBackups",
-        "SP_MCP_MESH_ROOTS": "D:\\Meshes"
+        "SP_MCP_MESH_ROOTS": "D:\\Meshes",
+        "SP_MCP_BAKE_MESH_ROOTS": "D:\\BakeMeshes"
       }
     }
   }
@@ -198,12 +205,15 @@ Replace the paths with your installation and export directories. You may also us
 | `SP_MCP_EXPORT_ROOTS` | unset | Approved export roots. Separate multiple Windows paths with `;`. |
 | `SP_MCP_PROJECT_ROOTS` | unset | Approved roots for `.spp` project copies. |
 | `SP_MCP_MESH_ROOTS` | unset | Approved input roots for FBX, OBJ, DAE, PLY, and USD mesh reloads. |
+| `SP_MCP_BAKE_MESH_ROOTS` | unset | Approved roots for high-poly and cage meshes used by baking. |
 
 Exports are disabled until `SP_MCP_EXPORT_ROOTS` is configured. `plan_texture_export` performs a read-only preflight. `export_textures` repeats the validation and refuses existing targets unless `overwrite=true` is explicitly supplied.
 
 Project copying is independently disabled until `SP_MCP_PROJECT_ROOTS` is configured. `save_project_copy` uses Painter's `save_as_copy`, verifies the resulting file, and confirms that the current project path did not change.
 
 Mesh reload is independently disabled until `SP_MCP_MESH_ROOTS` is configured. `plan_mesh_reload` is read-only; `start_mesh_reload` additionally requires `confirm=true`. A `backup_path` under `SP_MCP_PROJECT_ROOTS` can be supplied to create and verify a project copy before reload. Baking likewise requires `confirm=true` and can take the same optional backup parameters.
+
+High-poly and cage assignment is independently disabled until `SP_MCP_BAKE_MESH_ROOTS` is configured. `set_baking_mesh_inputs` accepts only existing mesh files below those roots. `preflight_bake` then validates the effective Painter settings before `start_batch_bake` changes any mesh maps.
 
 ## Safety model
 
@@ -217,6 +227,8 @@ Mesh reload is independently disabled until `SP_MCP_MESH_ROOTS` is configured. `
 - Mesh inputs are restricted to approved roots and Painter-supported extensions.
 - Generic procedural/baker parameter setters reject file and resource widgets; filesystem-backed inputs require dedicated sandboxed tools instead of accepting arbitrary paths.
 - Baking configuration reports every linked Texture Set affected by shared common or per-baker parameters and rolls the touched state back if any update fails.
+- Batch baking restores every Texture Set's original bake-enabled state after success, cancellation, launch failure, or Painter failure.
+- Baking presets omit file/resource widgets by design, keeping machine-specific paths out of portable configuration payloads.
 - Arbitrary Python is opt-in and disabled by default.
 
 The server is designed for local use. Do not expose Painter's remote-scripting port to untrusted networks.
@@ -255,16 +267,22 @@ $env:SP_MCP_MESH_ROOTS = "D:\Meshes"
 
 # v0.6 procedural parameters, presets, Anchor bindings, and baker config rollback
 .venv\Scripts\python.exe scripts\live_v06.py
+
+# v0.7 high-poly assignment, preset round trip, preflight, cancel/restore, and optional successful bake
+$env:SP_MCP_BAKE_MESH_ROOTS = "D:\BakeMeshes"
+.venv\Scripts\python.exe scripts\live_v07.py `
+  --high-poly D:\BakeMeshes\sample_high.fbx --success
 ```
 
-The 0.6.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 60 FastMCP schemas and 43 automated tests; discovered 30 editable parameters and three presets on the starter Carbon Fiber material; round-tripped a float and sRGB color; applied a named preset; created, discovered, and connected a mask Anchor Point as a Base Color `SourceReference`; and restored the exact original layer-tree digest after cleanup. It also changed and restored common dilation and AO secondary-ray settings while correctly reporting that linked parameters affected all three Texture Sets.
+The 0.7.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 65 FastMCP schemas and 49 automated tests; assigned an existing high-poly FBX through the approved-root sandbox; captured and reapplied an AO/ID preset; produced a ready preflight at the project's original 4096 resolution; cancelled a seven-map batch and restored all Texture Set enablement; then completed a temporary 256x256 AO bake, detected the changed mesh-map resource, marked it verified, and restored the original 4096/8x8-AA/seven-baker configuration.
 
 ## Roadmap and release notes
 
 - See [docs/RECIPES.md](docs/RECIPES.md) and the [VRChat outfit starter recipe](examples/recipes/vrchat_outfit.json) for transaction examples.
 - See [docs/PROCEDURAL_AND_BAKING.md](docs/PROCEDURAL_AND_BAKING.md) for typed procedural parameters, Anchor bindings, linked baker settings, and configuration examples.
+- See [docs/PRODUCTION_BAKING.md](docs/PRODUCTION_BAKING.md) for sandboxed mesh inputs, portable presets, preflight, batch jobs, and result manifests.
 - See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
-- See [docs/ROADMAP.md](docs/ROADMAP.md) for planned layer recipes, snapshots, backups, engine-specific export profiles, async baking, and Blender round-trip workflows.
+- See [docs/ROADMAP.md](docs/ROADMAP.md) for completed milestones and remaining Painter automation work.
 
 ## License
 

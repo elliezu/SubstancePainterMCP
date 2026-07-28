@@ -134,6 +134,9 @@ result = {
         "procedural_source_parameters": hasattr(source.SourceSubstance, "set_parameters"),
         "anchor_source_binding": hasattr(layerstack, "AnchorPointEffectNode"),
         "baking_parameter_editing": hasattr(baking.BakingParameters, "set"),
+        "batch_baking": hasattr(baking, "bake_selected_textures_async"),
+        "baking_mesh_inputs": hasattr(baking.BakingParameters, "set"),
+        "baking_presets": hasattr(baking.BakingParameters, "get"),
     },
 }
 '''
@@ -552,6 +555,463 @@ result = {
                 },
             )
         )
+
+    def set_baking_mesh_inputs(
+        self,
+        texture_set: str,
+        high_poly_files: list[str] | None = None,
+        cage_file: str | None = None,
+        low_as_high: bool | None = None,
+        cage_mode: str | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if not texture_set.strip():
+            raise ValueError("texture_set must be a non-empty name")
+        if high_poly_files is not None:
+            if not isinstance(high_poly_files, list) or any(
+                not isinstance(path, str) for path in high_poly_files
+            ):
+                raise ValueError("high_poly_files must be a list of paths")
+            if len(set(high_poly_files)) != len(high_poly_files):
+                raise ValueError("high_poly_files must not contain duplicates")
+        if cage_file is not None and not isinstance(cage_file, str):
+            raise ValueError("cage_file must be a path or an empty string to clear it")
+        if low_as_high is not None and not isinstance(low_as_high, bool):
+            raise ValueError("low_as_high must be a boolean")
+        cage_modes = {"Distance-based", "Automatic (experimental)", "Custom file"}
+        if cage_mode is not None and cage_mode not in cage_modes:
+            raise ValueError(f"cage_mode must be one of: {', '.join(sorted(cage_modes))}")
+        if all(value is None for value in (high_poly_files, cage_file, low_as_high, cage_mode)):
+            raise ValueError("At least one baking mesh input change is required")
+        if not confirm:
+            raise PermissionError("Baking mesh inputs modify the project; set confirm=true")
+
+        high_poly_urls = None
+        if high_poly_files is not None:
+            high_poly_urls = [
+                self._validate_bake_mesh_path(path).as_uri() for path in high_poly_files
+            ]
+        cage_url = None
+        if cage_file is not None:
+            cage_url = (
+                self._validate_bake_mesh_path(cage_file).as_uri() if cage_file else ""
+            )
+            if cage_file and cage_mode is None:
+                cage_mode = "Custom file"
+        code = '''
+import substance_painter.baking as baking
+import substance_painter.textureset as textureset
+
+target = textureset.TextureSet.from_name(params["texture_set"])
+settings = baking.BakingParameters.from_texture_set(target)
+common = settings.common()
+required = {"HipolyMesh", "CageMesh", "LowAsHigh", "CageMode"}
+missing = sorted(required - set(common))
+if missing:
+    raise RuntimeError(f"Painter does not expose required baking properties: {missing}")
+changes = {}
+if params.get("high_poly_urls") is not None:
+    changes[common["HipolyMesh"]] = "|".join(params["high_poly_urls"])
+if params.get("cage_url") is not None:
+    changes[common["CageMesh"]] = params["cage_url"]
+if params.get("low_as_high") is not None:
+    changes[common["LowAsHigh"]] = params["low_as_high"]
+if params.get("cage_mode") is not None:
+    changes[common["CageMode"]] = common["CageMode"].enum_value(params["cage_mode"])
+original = {prop: prop.value() for prop in changes}
+try:
+    settings.set(changes)
+except Exception:
+    try:
+        settings.set(original)
+    except Exception:
+        pass
+    raise
+linked = [
+    item.name() if callable(item.name) else item.name
+    for item in baking.get_linked_texture_sets_common_parameters(target)
+]
+cage_enum = {value: label for label, value in common["CageMode"].enum_values().items()}
+result = {
+    "texture_set": params["texture_set"],
+    "high_poly_files": common["HipolyMesh"].value().split("|") if common["HipolyMesh"].value() else [],
+    "cage_file": common["CageMesh"].value(),
+    "low_as_high": common["LowAsHigh"].value(),
+    "cage_mode": cage_enum.get(common["CageMode"].value(), common["CageMode"].value()),
+    "impacted_texture_sets": linked,
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "texture_set": texture_set,
+                    "high_poly_urls": high_poly_urls,
+                    "cage_url": cage_url,
+                    "low_as_high": low_as_high,
+                    "cage_mode": cage_mode,
+                },
+            )
+        )
+
+    def capture_baking_preset(
+        self, texture_set: str, bakers: list[str] | None = None
+    ) -> dict[str, Any]:
+        if not texture_set.strip():
+            raise ValueError("texture_set must be a non-empty name")
+        if bakers is not None and (
+            any(not isinstance(name, str) or not name for name in bakers)
+            or len(set(bakers)) != len(bakers)
+        ):
+            raise ValueError("bakers must contain unique non-empty names")
+        code = '''
+import substance_painter.baking as baking
+import substance_painter.textureset as textureset
+
+def portable(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [portable(item) for item in value]
+    if hasattr(value, "value_raw"):
+        return list(value.value_raw)
+    raise TypeError(f"Unsupported preset value: {type(value).__name__}")
+
+def safe_values(properties):
+    return {
+        key: portable(prop.value())
+        for key, prop in properties.items()
+        if prop.widget_type() not in {"File", "FileList", "Resource"}
+    }
+
+target = textureset.TextureSet.from_name(params["texture_set"])
+settings = baking.BakingParameters.from_texture_set(target)
+available = textureset.MeshMapUsage.__members__
+requested = params.get("bakers")
+if requested is None:
+    requested = [usage.name for usage in settings.get_enabled_bakers()]
+missing = [name for name in requested if name not in available]
+if missing:
+    raise ValueError(f"Unknown bakers: {missing}")
+result = {
+    "schema": "substance-painter-mcp/baking-preset@1",
+    "source_texture_set": params["texture_set"],
+    "enabled": settings.is_textureset_enabled(),
+    "enabled_bakers": [usage.name for usage in settings.get_enabled_bakers()],
+    "enabled_uv_tiles": [1001 + tile.u + 10 * tile.v for tile in settings.get_enabled_uv_tiles()],
+    "curvature_method": settings.get_curvature_method().name,
+    "common_values": safe_values(settings.common()),
+    "baker_values": {
+        name: safe_values(settings.baker(available[name])) for name in requested
+    },
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code, {"texture_set": texture_set, "bakers": bakers}
+            )
+        )
+
+    def apply_baking_preset(
+        self,
+        texture_set: str,
+        preset: dict[str, Any],
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(preset, dict):
+            raise ValueError("preset must be an object")
+        if preset.get("schema") != "substance-painter-mcp/baking-preset@1":
+            raise ValueError("Unsupported baking preset schema")
+        required = {
+            "enabled",
+            "enabled_bakers",
+            "enabled_uv_tiles",
+            "curvature_method",
+            "common_values",
+            "baker_values",
+        }
+        missing = sorted(required - set(preset))
+        if missing:
+            raise ValueError(f"Baking preset is missing fields: {', '.join(missing)}")
+        result = self.configure_baking(
+            texture_set=texture_set,
+            enabled=preset["enabled"],
+            enabled_bakers=preset["enabled_bakers"],
+            enabled_uv_tiles=preset["enabled_uv_tiles"],
+            curvature_method=preset["curvature_method"],
+            common_values=preset["common_values"],
+            baker_values=preset["baker_values"],
+            confirm=confirm,
+        )
+        result["preset_schema"] = preset["schema"]
+        result["source_texture_set"] = preset.get("source_texture_set")
+        return result
+
+    def preflight_bake(self, texture_sets: list[str] | None = None) -> dict[str, Any]:
+        if texture_sets is not None:
+            if not texture_sets or any(not isinstance(name, str) or not name for name in texture_sets):
+                raise ValueError("texture_sets must contain at least one non-empty name")
+            if len(set(texture_sets)) != len(texture_sets):
+                raise ValueError("texture_sets must not contain duplicates")
+        code = '''
+import os
+from PySide6 import QtCore
+import substance_painter.baking as baking
+import substance_painter.project as project
+import substance_painter.textureset as textureset
+
+if not project.is_open():
+    raise RuntimeError("No project is open")
+all_sets = {
+    (item.name() if callable(item.name) else item.name): item
+    for item in textureset.all_texture_sets()
+}
+requested = params.get("texture_sets")
+if requested is None:
+    requested = [
+        name for name, item in all_sets.items()
+        if baking.BakingParameters.from_texture_set(item).is_textureset_enabled()
+    ]
+missing = [name for name in requested if name not in all_sets]
+if missing:
+    raise ValueError(f"Unknown Texture Sets: {missing}")
+entries = []
+all_issues = []
+busy = project.is_busy()
+if busy:
+    all_issues.append({"code": "painter_busy", "message": "Painter is busy with another operation."})
+if not requested:
+    all_issues.append({"code": "no_texture_sets", "message": "No Texture Sets were selected or enabled for baking."})
+for name in requested:
+    item = all_sets[name]
+    settings = baking.BakingParameters.from_texture_set(item)
+    common = settings.common()
+    errors = []
+    warnings = []
+    enabled_bakers = [usage.name for usage in settings.get_enabled_bakers()]
+    enabled_tiles = [1001 + tile.u + 10 * tile.v for tile in settings.get_enabled_uv_tiles()]
+    if not settings.is_textureset_enabled():
+        warnings.append({"code": "texture_set_disabled", "message": "Batch execution will enable it temporarily."})
+    if not enabled_bakers:
+        errors.append({"code": "no_enabled_bakers", "message": "No mesh-map bakers are enabled."})
+    if not enabled_tiles:
+        errors.append({"code": "no_enabled_uv_tiles", "message": "No UV tiles are enabled for baking."})
+    high_urls = common["HipolyMesh"].value().split("|") if common["HipolyMesh"].value() else []
+    cage_url = common["CageMesh"].value()
+    low_as_high = bool(common["LowAsHigh"].value())
+    cage_value = common["CageMode"].value()
+    cage_labels = {value: label for label, value in common["CageMode"].enum_values().items()}
+    cage_mode = cage_labels.get(cage_value, str(cage_value))
+    missing_files = []
+    for url in high_urls + ([cage_url] if cage_url else []):
+        local = QtCore.QUrl(url).toLocalFile()
+        if not local or not os.path.isfile(local):
+            missing_files.append({"url": url, "path": local})
+    if not low_as_high and not high_urls:
+        errors.append({"code": "missing_high_poly", "message": "LowAsHigh is false but no high-poly mesh is assigned."})
+    if cage_mode == "Custom file" and not cage_url:
+        errors.append({"code": "missing_cage", "message": "Custom cage mode requires a cage mesh."})
+    if missing_files:
+        errors.append({"code": "missing_mesh_files", "files": missing_files})
+    output_size = common["OutputSize"].value()
+    aa_prop = common.get("SubSampling")
+    aa_label = None
+    if aa_prop is not None:
+        aa_label = {value: label for label, value in aa_prop.enum_values().items()}.get(aa_prop.value())
+    mesh_maps = {}
+    for usage_name in enabled_bakers:
+        usage = textureset.MeshMapUsage.__members__[usage_name]
+        resource_id = item.get_mesh_map_resource(usage)
+        mesh_maps[usage_name] = resource_id.url() if resource_id else None
+    entry = {
+        "texture_set": name,
+        "enabled": settings.is_textureset_enabled(),
+        "enabled_bakers": enabled_bakers,
+        "enabled_uv_tiles": enabled_tiles,
+        "output_size_log2": list(output_size),
+        "output_size": [2 ** output_size[0], 2 ** output_size[1]],
+        "antialiasing": aa_label,
+        "low_as_high": low_as_high,
+        "high_poly_files": high_urls,
+        "cage_mode": cage_mode,
+        "cage_file": cage_url,
+        "mesh_maps_before": mesh_maps,
+        "errors": errors,
+        "warnings": warnings,
+    }
+    entries.append(entry)
+    all_issues.extend({"texture_set": name, **issue} for issue in errors)
+result = {
+    "ready": bool(entries) and not all_issues,
+    "busy": busy,
+    "texture_sets": entries,
+    "errors": all_issues,
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(code, {"texture_sets": texture_sets})
+        )
+
+    def start_batch_bake(
+        self,
+        texture_sets: list[str],
+        confirm: bool = False,
+        backup_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError("Batch baking modifies mesh maps; set confirm=true to start")
+        plan = self.preflight_bake(texture_sets)
+        if not plan["ready"]:
+            raise ValueError(f"Bake preflight failed: {plan['errors']}")
+        backup = (
+            self.save_project_copy(backup_path, backup_mode, overwrite_backup)
+            if backup_path
+            else None
+        )
+        code = '''
+import builtins
+import time
+import uuid
+import substance_painter.baking as baking
+import substance_painter.event as event
+import substance_painter.project as project
+import substance_painter.textureset as textureset
+
+if project.is_busy():
+    raise RuntimeError("Painter is busy")
+previous_refs = getattr(builtins, "_sp_mcp_bake_refs", None)
+if previous_refs:
+    for event_cls, callback in previous_refs:
+        try:
+            event.DISPATCHER.disconnect(event_cls, callback)
+        except Exception:
+            pass
+all_sets = {
+    (item.name() if callable(item.name) else item.name): item
+    for item in textureset.all_texture_sets()
+}
+selected = set(params["texture_sets"])
+original_enabled = {
+    name: baking.BakingParameters.from_texture_set(item).is_textureset_enabled()
+    for name, item in all_sets.items()
+}
+before_maps = {}
+expected = {}
+for name in params["texture_sets"]:
+    item = all_sets[name]
+    settings = baking.BakingParameters.from_texture_set(item)
+    usages = [usage.name for usage in settings.get_enabled_bakers()]
+    expected[name] = usages
+    before_maps[name] = {}
+    for usage_name in usages:
+        resource_id = item.get_mesh_map_resource(textureset.MeshMapUsage.__members__[usage_name])
+        before_maps[name][usage_name] = resource_id.url() if resource_id else None
+
+job_id = uuid.uuid4().hex
+state = {
+    "job_id": job_id,
+    "operation": "batch_bake",
+    "texture_sets": params["texture_sets"],
+    "status": "starting",
+    "progress": 0.0,
+    "cancel_requested": False,
+    "started_at": time.time(),
+    "finished_at": None,
+    "error": None,
+    "results": None,
+}
+builtins._sp_mcp_bake_state = state
+
+def restore_enabled():
+    for name, enabled in original_enabled.items():
+        try:
+            baking.BakingParameters.from_texture_set(all_sets[name]).set_textureset_enabled(enabled)
+        except Exception:
+            pass
+
+def on_about_to_start(message):
+    if getattr(builtins, "_sp_mcp_bake_state", None) is state:
+        state["status"] = "running"
+
+def on_progress(message):
+    if getattr(builtins, "_sp_mcp_bake_state", None) is state:
+        state["status"] = "running"
+        state["progress"] = max(0.0, min(1.0, float(message.progress)))
+
+def on_ended(message):
+    if getattr(builtins, "_sp_mcp_bake_state", None) is not state:
+        return
+    status_name = message.status.name
+    state["status"] = {"Success": "success", "Cancel": "cancelled", "Fail": "failed"}.get(
+        status_name, status_name.casefold()
+    )
+    if status_name == "Fail":
+        state["error"] = "Painter reported a baking failure; its event API exposes no per-baker log text."
+    state["progress"] = 1.0 if status_name == "Success" else state["progress"]
+    state["finished_at"] = time.time()
+    results = {}
+    for name in params["texture_sets"]:
+        item = all_sets[name]
+        maps = {}
+        for usage_name in expected[name]:
+            resource_id = item.get_mesh_map_resource(textureset.MeshMapUsage.__members__[usage_name])
+            after = resource_id.url() if resource_id else None
+            before = before_maps[name][usage_name]
+            maps[usage_name] = {
+                "before": before,
+                "after": after,
+                "present": after is not None,
+                "changed": before != after,
+                "verified": status_name == "Success" and after is not None,
+                "status": (
+                    ("updated" if before != after else "present_unchanged")
+                    if status_name == "Success" and after is not None
+                    else ("missing" if status_name == "Success" else state["status"])
+                ),
+            }
+        results[name] = {
+            "mesh_maps": maps,
+            "expected_count": len(maps),
+            "present_count": sum(1 for value in maps.values() if value["present"]),
+            "all_present": all(value["present"] for value in maps.values()),
+            "all_verified": all(value["verified"] for value in maps.values()),
+        }
+    state["results"] = results
+    restore_enabled()
+
+refs = [
+    (event.BakingProcessAboutToStart, on_about_to_start),
+    (event.BakingProcessProgress, on_progress),
+    (event.BakingProcessEnded, on_ended),
+]
+for event_cls, callback in refs:
+    event.DISPATCHER.connect_strong(event_cls, callback)
+builtins._sp_mcp_bake_refs = refs
+try:
+    for name, item in all_sets.items():
+        baking.BakingParameters.from_texture_set(item).set_textureset_enabled(name in selected)
+    stop_source = baking.bake_selected_textures_async()
+    builtins._sp_mcp_bake_stop_source = stop_source
+    if state["status"] == "starting":
+        state["status"] = "running"
+except Exception as exc:
+    restore_enabled()
+    state["status"] = "failed"
+    state["error"] = f"{type(exc).__name__}: {exc}"
+    state["finished_at"] = time.time()
+    raise
+result = dict(state)
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(
+                code, {"texture_sets": texture_sets}
+            )
+        )
+        result["preflight"] = plan
+        result["backup"] = backup
+        return result
 
     def start_bake(
         self,
@@ -3233,6 +3693,23 @@ result = {"uid": node.uid(), "layer": node.get_name(), "kind": params["kind"]}
             raise ValueError("mesh_file_path must use fbx, obj, dae, ply, or usd")
         if not mesh.is_file():
             raise FileNotFoundError(f"Mesh file does not exist: {mesh}")
+        return mesh
+
+    @classmethod
+    def _validate_bake_mesh_path(cls, mesh_file_path: str) -> Path:
+        mesh = cls._validate_allowed_path(
+            mesh_file_path, "SP_MCP_BAKE_MESH_ROOTS", "Baking mesh input"
+        )
+        supported = {
+            ".fbx", ".abc", ".obj", ".dae", ".ply", ".gltf", ".glb",
+            ".usd", ".usda", ".usdc", ".usdz",
+        }
+        if mesh.suffix.casefold() not in supported:
+            raise ValueError(
+                "Baking mesh inputs must use fbx, abc, obj, dae, ply, gltf, glb, or usd"
+            )
+        if not mesh.is_file():
+            raise FileNotFoundError(f"Baking mesh input does not exist: {mesh}")
         return mesh
 
     @staticmethod

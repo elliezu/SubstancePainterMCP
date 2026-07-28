@@ -300,6 +300,88 @@ def test_baking_parameter_inspection_transports_baker():
     assert remote.calls[0][1] == {"texture_set": "Body", "baker": "AO"}
 
 
+def test_baking_mesh_inputs_require_confirmation_and_approved_root(monkeypatch, tmp_path):
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.set_baking_mesh_inputs("Body", high_poly_files=["C:/high.fbx"])
+    monkeypatch.delenv("SP_MCP_BAKE_MESH_ROOTS", raising=False)
+    with pytest.raises(PermissionError, match="disabled"):
+        operations.set_baking_mesh_inputs(
+            "Body", high_poly_files=[str(tmp_path / "high.fbx")], confirm=True
+        )
+
+
+def test_baking_mesh_inputs_transport_file_urls(monkeypatch, tmp_path):
+    high = tmp_path / "high.fbx"
+    cage = tmp_path / "cage.obj"
+    high.write_bytes(b"mesh")
+    cage.write_bytes(b"mesh")
+    monkeypatch.setenv("SP_MCP_BAKE_MESH_ROOTS", str(tmp_path))
+    remote = FakeRemote()
+    PainterOperations(remote).set_baking_mesh_inputs(
+        "Body",
+        high_poly_files=[str(high)],
+        cage_file=str(cage),
+        low_as_high=False,
+        confirm=True,
+    )
+    assert remote.calls[0][1] == {
+        "texture_set": "Body",
+        "high_poly_urls": [high.resolve().as_uri()],
+        "cage_url": cage.resolve().as_uri(),
+        "low_as_high": False,
+        "cage_mode": "Custom file",
+    }
+
+
+def test_baking_preset_schema_and_capture_validation_are_local():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="unique"):
+        operations.capture_baking_preset("Body", ["AO", "AO"])
+    with pytest.raises(ValueError, match="schema"):
+        operations.apply_baking_preset("Body", {"schema": "future"}, confirm=True)
+    assert operations.remote.calls == []
+
+
+def test_apply_baking_preset_routes_through_transactional_configuration():
+    remote = FakeRemote()
+    preset = {
+        "schema": "substance-painter-mcp/baking-preset@1",
+        "source_texture_set": "Source",
+        "enabled": True,
+        "enabled_bakers": ["AO"],
+        "enabled_uv_tiles": [1001],
+        "curvature_method": "FromMesh",
+        "common_values": {"OutputSize": [10, 10]},
+        "baker_values": {"AO": {"Distribution": "Cosine"}},
+    }
+    result = PainterOperations(remote).apply_baking_preset(
+        "Target", preset, confirm=True
+    )
+    assert remote.calls[0][1]["texture_set"] == "Target"
+    assert remote.calls[0][1]["common_values"] == {"OutputSize": [10, 10]}
+    assert result["preset_schema"] == preset["schema"]
+    assert result["source_texture_set"] == "Source"
+
+
+def test_bake_preflight_validates_selection_and_transports_names():
+    remote = FakeRemote()
+    operations = PainterOperations(remote)
+    with pytest.raises(ValueError, match="at least one"):
+        operations.preflight_bake([])
+    with pytest.raises(ValueError, match="duplicates"):
+        operations.preflight_bake(["Body", "Body"])
+    operations.preflight_bake(["Body", "Head"])
+    assert remote.calls[0][1] == {"texture_sets": ["Body", "Head"]}
+
+
+def test_batch_bake_requires_confirmation_before_preflight():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.start_batch_bake(["Body"])
+    assert operations.remote.calls == []
+
+
 def test_smart_material_requires_resource_url():
     with pytest.raises(ValueError, match="resource://"):
         PainterOperations(FakeRemote()).insert_smart_material("https://example.com/material")

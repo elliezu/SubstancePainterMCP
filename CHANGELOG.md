@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.7.0 - 2026-07-28
+
+Version 0.7.0 expands the server from 60 to 65 tools and turns the existing asynchronous bake primitive into a production-oriented, multi-Texture-Set baking workflow.
+
+### Sandboxed baking mesh inputs
+
+- Added `set_baking_mesh_inputs` for one or more high-poly meshes, an optional cage mesh, Low as High, and Cage Mode.
+- Added the independent `SP_MCP_BAKE_MESH_ROOTS` allowlist and required every supplied mesh to exist below an approved root with a supported mesh extension.
+- Encoded paths as local file URLs and joined multiple high-poly inputs in Painter's native `HipolyMesh` format.
+- Automatically selected Custom file cage mode when a cage was supplied without an explicit mode.
+- Applied shared baking properties transactionally and restored every touched property if Painter rejected any update.
+- Reported all Texture Sets affected by Painter's linked common-parameter groups.
+
+### Portable baking presets
+
+- Added `capture_baking_preset` with the versioned `substance-painter-mcp/baking-preset@1` schema.
+- Captured Texture Set enablement, enabled bakers, selected UDIMs, curvature mode, common values, and selected per-baker values.
+- Excluded File, FileList, and Resource widgets so presets remain portable and cannot smuggle machine-specific paths around the sandbox.
+- Added `apply_baking_preset`, which validates the schema and routes through the existing confirmed, transactional baker configuration path.
+
+### Preflight and batch execution
+
+- Added `preflight_bake` for one or more Texture Sets, defaulting to the currently bake-enabled sets.
+- Reported resolution, antialiasing, enabled bakers, enabled UV tiles, high-poly/cage inputs, current mesh-map resources, expected maps, and structured warnings/errors.
+- Detected missing mesh inputs, disabled Low as High, invalid cage combinations, missing files, empty baker/tile selections, duplicate/unknown Texture Sets, closed projects, and active Painter jobs before mutation.
+- Added `start_batch_bake` with explicit confirmation, optional verified `.spp` backup, Painter event progress, cooperative cancellation, and persistent job state.
+- Temporarily selected exactly the requested Texture Sets for Painter's batch API and restored every original bake-enabled state after success, cancellation, failure, or launch exceptions.
+- Captured mesh-map URLs before and after the job and returned a per-Texture-Set, per-baker manifest with presence, change, verification, and status fields.
+- Documented Painter's public event limitation: a failed bake exposes only a global failure result, not per-baker log text.
+
+### Validation
+
+- Expanded the automated suite from 43 to 49 tests and verified all 65 FastMCP schemas.
+- Live-assigned an existing FBX high-poly mesh through the approved-root sandbox in Painter 12.1.1.
+- Captured and reapplied an AO/ID preset and obtained a ready preflight for a three-Texture-Set project.
+- Cancelled a seven-map batch and verified exact restoration of all original Texture Set enablement.
+- Completed a temporary 256x256 AO batch, observed the mesh-map resource change, verified the result manifest, and restored the original 4096 resolution, 8x8 antialiasing, seven enabled bakers, and AO ray count.
+
 ## 0.6.0 - 2026-07-28
 
 Version 0.6.0 expands the server from 53 to 60 tools and adds typed procedural authoring, Anchor Point source graphs, and transactional baker configuration.

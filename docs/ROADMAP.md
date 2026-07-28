@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0-0.6.0
+### Completed in 0.2.0-0.7.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -42,6 +42,8 @@ These features can be created, verified, and cleaned up in a sample project with
 - Typed procedural Substance parameter inspection, editing, and preset application.
 - Anchor Point discovery and Fill source bindings.
 - Transactional common/per-baker configuration with linked Texture Set reporting.
+- Sandboxed high-poly/cage assignment and portable baking presets.
+- Multi-Texture-Set bake preflight, batch jobs, state restoration, and result manifests.
 
 ### Layer structure and recipes
 
@@ -104,9 +106,10 @@ Painter's asynchronous APIs need to be connected to MCP progress and cancellatio
 - Completed in 0.5.0: persistent progress, terminal status, and cancellation through Painter events.
 - Completed in 0.6.0: configure enabled bakers, selected UDIMs, curvature mode, common properties, and individual baker properties transactionally.
 - Completed in 0.6.0: report Texture Sets affected by linked common/per-baker properties.
-- Next: add dedicated sandboxed high-poly/cage file assignment and configuration presets.
+- Completed in 0.7.0: dedicated sandboxed high-poly/cage file assignment and portable configuration presets.
+- Completed in 0.7.0: multi-Texture-Set preflight and batch execution with cancellation, original enablement restoration, and per-map resource verification.
 - Investigate Painter 12.1 Auto Rebake and Skew Map capabilities.
-- Return structured failures by baker with relevant logs.
+- Investigate alternate log sources for per-baker failure text; Painter's public baking event currently reports only global success, cancellation, or failure.
 
 ### Project creation and mesh reload
 

@@ -84,6 +84,64 @@ def configure_baking(
 
 
 @mcp.tool()
+def set_baking_mesh_inputs(
+    texture_set: str,
+    high_poly_files: list[str] | None = None,
+    cage_file: str | None = None,
+    low_as_high: bool | None = None,
+    cage_mode: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Assign sandboxed high-poly/cage meshes and related common baker settings."""
+    return operations.set_baking_mesh_inputs(
+        texture_set,
+        high_poly_files,
+        cage_file,
+        low_as_high,
+        cage_mode,
+        confirm,
+    )
+
+
+@mcp.tool()
+def capture_baking_preset(
+    texture_set: str, bakers: list[str] | None = None
+) -> dict[str, Any]:
+    """Capture a portable JSON baking preset without filesystem-backed properties."""
+    return operations.capture_baking_preset(texture_set, bakers)
+
+
+@mcp.tool()
+def apply_baking_preset(
+    texture_set: str,
+    preset: dict[str, Any],
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Apply a captured baking preset transactionally after explicit confirmation."""
+    return operations.apply_baking_preset(texture_set, preset, confirm)
+
+
+@mcp.tool()
+def preflight_bake(texture_sets: list[str] | None = None) -> dict[str, Any]:
+    """Validate selected Texture Sets, mesh inputs, UV tiles, and expected mesh maps."""
+    return operations.preflight_bake(texture_sets)
+
+
+@mcp.tool()
+def start_batch_bake(
+    texture_sets: list[str],
+    confirm: bool = False,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Preflight and start a cancellable multi-Texture-Set bake with result manifests."""
+    return operations.start_batch_bake(
+        texture_sets, confirm, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
 def start_bake(
     texture_set: str,
     confirm: bool = False,

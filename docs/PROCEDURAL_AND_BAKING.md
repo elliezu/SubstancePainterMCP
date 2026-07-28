@@ -103,3 +103,5 @@ Combobox properties expose labels and numeric values. Callers may send the reada
 The operation snapshots all touched state before editing. If any property, baker, or UV tile fails validation or application, the server restores Texture Set enablement, enabled bakers, selected tiles, curvature mode, and every touched property.
 
 Painter can link common or per-baker properties across Texture Sets. The response therefore includes `impacted_texture_sets`; review that list before starting a bake. Use `start_bake` and `get_bake_job` only after the configuration is verified, and use an optional `.spp` backup for production projects.
+
+For high-poly/cage assignment, reusable presets, multi-Texture-Set preflight, and verified batch execution, continue with [PRODUCTION_BAKING.md](PRODUCTION_BAKING.md). These filesystem-backed inputs intentionally use a separate approved-root policy instead of the generic property setter.
