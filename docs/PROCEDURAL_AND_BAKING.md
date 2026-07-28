@@ -1,6 +1,6 @@
-# Procedural Sources, Anchor Points, and Baker Configuration
+# Procedural Sources, Inputs, Anchor Points, and Baker Configuration
 
-Version 0.6 exposes Painter's typed property system without falling back to arbitrary Python execution. Always inspect a source or baker first: property identifiers, value types, ranges, enum labels, and even visibility can differ between assets and Painter releases.
+Versions 0.6-0.8 expose Painter's typed property and image-input systems without falling back to arbitrary Python execution. Always inspect a source or baker first: property identifiers, value types, ranges, enum labels, image inputs, and even visibility can differ between assets and Painter releases.
 
 ## Procedural Fill sources
 
@@ -37,6 +37,8 @@ Update only the identifiers that need to change:
 ```
 
 `set_fill_parameters` converts colors and combobox labels to Painter-native values, checks numeric ranges, and applies the values as one batch. If conversion or application fails, it restores every touched parameter. File and resource widgets are intentionally rejected because they need separate approved-root policies.
+
+Use `get_procedural_inputs` and `set_procedural_input` for bitmap, uniform-color, or Anchor-backed image inputs on Fill, Fill Effect, Generator, and Filter sources. Import local files first through the sandboxed resource tools described in [RESOURCE_INGESTION.md](RESOURCE_INGESTION.md).
 
 Use `apply_fill_preset` only with a name returned by `get_fill_parameters`. Painter source presets are asset-specific and case-sensitive.
 

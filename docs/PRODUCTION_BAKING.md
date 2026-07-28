@@ -48,7 +48,9 @@ Capture all exposed baker settings or only selected bakers:
 }
 ```
 
-The returned payload uses schema `substance-painter-mcp/baking-preset@1`. It includes enablement, enabled bakers, standard UDIMs, curvature method, common values, and per-baker values. File, FileList, and Resource widgets are omitted deliberately; assign filesystem-backed inputs through `set_baking_mesh_inputs` on each machine.
+The returned payload uses schema `substance-painter-mcp/baking-preset@1`. It includes enablement, enabled bakers, standard UDIMs, curvature method, common values, and per-baker values. File, FileList, and Resource widgets are omitted deliberately; assign filesystem-backed inputs through `set_baking_mesh_inputs` or import and connect them through `set_baking_resource_input` on each machine.
+
+Painter 12.1 exposes `OffsetMap` as a common Resource property for skew correction. Import the texture through `import_project_resource`, then connect its verified URL with `set_baking_resource_input`. Auto Rebake and entering Skew Painting mode remain UI-only in Painter 12.1.1's public Python API; `get_capabilities` reports both controls as unavailable.
 
 Apply the captured object with `apply_baking_preset` and `confirm=true`. Application uses the same validation, linked-impact reporting, and rollback guarantees as `configure_baking`.
 

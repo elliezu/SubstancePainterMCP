@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0-0.7.0
+### Completed in 0.2.0-0.8.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -44,6 +44,8 @@ These features can be created, verified, and cleaned up in a sample project with
 - Transactional common/per-baker configuration with linked Texture Set reporting.
 - Sandboxed high-poly/cage assignment and portable baking presets.
 - Multi-Texture-Set bake preflight, batch jobs, state restoration, and result manifests.
+- Sandboxed project/session resource ingestion with exact ResourceID verification.
+- Procedural image-input wiring and Resource-typed baking inputs.
 
 ### Layer structure and recipes
 
@@ -93,7 +95,7 @@ These operations require approved output locations and result verification, but 
 - Completed in 0.5.0: inspect and connect channel/material resources.
 - Completed in 0.5.0: advanced Planar, Spherical, and Cylindrical projection parameters.
 - Completed in 0.6.0: typed procedural parameters, named presets, and Anchor Point bindings.
-- Next: expose sandboxed bitmap/resource inputs for procedural Substance graph inputs.
+- Completed in 0.8.0: sandboxed project/session imports plus bitmap/resource inputs for Fill, Fill Effect, Generator, and Filter procedural graphs.
 
 ## P3 - Long-running jobs and event bridging
 
@@ -108,7 +110,8 @@ Painter's asynchronous APIs need to be connected to MCP progress and cancellatio
 - Completed in 0.6.0: report Texture Sets affected by linked common/per-baker properties.
 - Completed in 0.7.0: dedicated sandboxed high-poly/cage file assignment and portable configuration presets.
 - Completed in 0.7.0: multi-Texture-Set preflight and batch execution with cancellation, original enablement restoration, and per-map resource verification.
-- Investigate Painter 12.1 Auto Rebake and Skew Map capabilities.
+- Completed in 0.8.0: dedicated Resource-property editing, including the Painter 12.1 `OffsetMap` skew input.
+- Investigated in 0.8.0: Painter 12.1.1 exposes no public Python method for Auto Rebake or entering Skew Painting mode. Keep both capability flags false until Adobe adds a supported API; do not substitute brittle UI automation.
 - Investigate alternate log sources for per-baker failure text; Painter's public baking event currently reports only global success, cancellation, or failure.
 
 ### Project creation and mesh reload

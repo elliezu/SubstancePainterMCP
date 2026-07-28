@@ -53,6 +53,27 @@ EXPORT_PROFILES: dict[str, dict[str, Any]] = {
     },
 }
 
+SAFE_RESOURCE_IMPORT_USAGES = {
+    "ALPHA",
+    "BASE_MATERIAL",
+    "BRUSH",
+    "COLOR_LUT",
+    "ENVIRONMENT",
+    "EXPORT",
+    "FILTER",
+    "FONT",
+    "GENERATOR",
+    "PROCEDURAL",
+    "SMART_MASK",
+    "SMART_MATERIAL",
+    "TEXTURE",
+}
+
+BLOCKED_RESOURCE_EXTENSIONS = {
+    ".bat", ".cmd", ".com", ".dll", ".exe", ".js", ".jsx", ".ps1",
+    ".py", ".pyc", ".pyd", ".qml", ".vbs",
+}
+
 
 def _unwrap(envelope: dict[str, Any]) -> Any:
     if envelope.get("success"):
@@ -106,6 +127,7 @@ import substance_painter.baking as baking
 import substance_painter.export as export
 import substance_painter.layerstack as layerstack
 import substance_painter.project as project
+import substance_painter.resource as resource
 import substance_painter.source as source
 import substance_painter.textureset as textureset
 
@@ -137,6 +159,11 @@ result = {
         "batch_baking": hasattr(baking, "bake_selected_textures_async"),
         "baking_mesh_inputs": hasattr(baking.BakingParameters, "set"),
         "baking_presets": hasattr(baking.BakingParameters, "get"),
+        "resource_import": hasattr(resource, "import_project_resource"),
+        "procedural_image_inputs": hasattr(source.SourceSubstance, "set_source"),
+        "baking_resource_inputs": hasattr(baking.BakingParameters, "set"),
+        "auto_rebake_control": hasattr(baking, "set_auto_rebake"),
+        "skew_painting_control": hasattr(baking, "start_skew_painting"),
     },
 }
 '''
@@ -650,6 +677,91 @@ result = {
                     "cage_url": cage_url,
                     "low_as_high": low_as_high,
                     "cage_mode": cage_mode,
+                },
+            )
+        )
+
+    def set_baking_resource_input(
+        self,
+        texture_set: str,
+        parameter: str,
+        resource_url: str | None = None,
+        baker: str | None = None,
+        clear: bool = False,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if not texture_set.strip():
+            raise ValueError("texture_set must be a non-empty name")
+        if not parameter.strip():
+            raise ValueError("parameter must be a non-empty name")
+        if clear == (resource_url is not None):
+            raise ValueError("Provide exactly one of resource_url or clear=true")
+        if resource_url is not None and not resource_url.startswith("resource://"):
+            raise ValueError("resource_url must start with resource://")
+        if baker is not None and not baker.strip():
+            raise ValueError("baker must be a non-empty name when supplied")
+        if not confirm:
+            raise PermissionError("Baking resource inputs modify the project; set confirm=true")
+        code = '''
+import substance_painter.baking as baking
+import substance_painter.resource as resource
+import substance_painter.textureset as textureset
+
+target = textureset.TextureSet.from_name(params["texture_set"])
+settings = baking.BakingParameters.from_texture_set(target)
+if params.get("baker"):
+    if params["baker"] not in textureset.MeshMapUsage.__members__:
+        raise ValueError(f"Unknown baker: {params['baker']}")
+    usage = textureset.MeshMapUsage.__members__[params["baker"]]
+    properties = settings.baker(usage)
+else:
+    usage = None
+    properties = settings.common()
+if params["parameter"] not in properties:
+    raise ValueError(f"Unknown baking parameter: {params['parameter']}")
+prop = properties[params["parameter"]]
+if prop.widget_type() != "Resource":
+    raise ValueError(
+        f"Baking parameter {params['parameter']} is {prop.widget_type()}, not Resource"
+    )
+value = ""
+if params.get("resource_url") is not None:
+    resource_id = resource.ResourceID.from_url(params["resource_url"])
+    if not resource.Resource.retrieve(resource_id):
+        raise ValueError(f"Resource not found: {params['resource_url']}")
+    value = resource_id.url()
+original = prop.value()
+try:
+    settings.set({prop: value})
+except Exception:
+    try:
+        settings.set({prop: original})
+    except Exception:
+        pass
+    raise
+if usage is None:
+    linked = baking.get_linked_texture_sets_common_parameters(target)
+else:
+    linked = baking.get_linked_texture_sets(target, usage)
+result = {
+    "texture_set": params["texture_set"],
+    "baker": params.get("baker"),
+    "parameter": params["parameter"],
+    "resource_url": prop.value(),
+    "cleared": not bool(prop.value()),
+    "impacted_texture_sets": [
+        item.name() if callable(item.name) else item.name for item in linked
+    ],
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "texture_set": texture_set,
+                    "parameter": parameter,
+                    "resource_url": resource_url,
+                    "baker": baker,
                 },
             )
         )
@@ -2302,6 +2414,227 @@ result = {
 '''
         return _unwrap(self.remote.execute_python_json(code, {"uid": uid}))
 
+    def get_procedural_inputs(
+        self, uid: int, channel: str | None = None
+    ) -> dict[str, Any]:
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.textureset as textureset
+
+def resolve_source(node, requested):
+    if isinstance(node, (layerstack.GeneratorEffectNode, layerstack.FilterEffectNode)):
+        if requested is not None:
+            raise ValueError("channel must be omitted for Generator/Filter effects")
+        source = node.get_source()
+        if source is None:
+            raise ValueError("Generator/Filter effect has no procedural source")
+        return source, None
+    if node.source_mode.name == "Material":
+        if requested is not None:
+            raise ValueError("channel must be omitted for a material-mode Fill")
+        return node.get_material_source(), None
+    if not requested:
+        raise ValueError("channel is required for a split-mode Fill")
+    aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+    name = requested if requested in textureset.ChannelType.__members__ else aliases.get(requested)
+    if not name or name not in textureset.ChannelType.__members__:
+        raise ValueError(f"Unknown channel: {requested}")
+    resolved = textureset.ChannelType.__members__[name]
+    if resolved not in node.active_channels:
+        raise ValueError(f"Channel is not active on this Fill: {requested}")
+    return node.get_source(resolved), resolved.name
+
+def describe(item):
+    resource_url = None
+    try:
+        resource_id = getattr(item, "resource_id", None)
+    except ValueError:
+        resource_id = None
+    if resource_id is not None:
+        try:
+            resource_url = resource_id.url()
+        except ValueError:
+            resource_url = None
+    color = None
+    if hasattr(item, "get_color"):
+        value = item.get_color()
+        color = {"value": list(value.value_raw), "color_space": str(value.color_space)}
+    anchor_uid = None
+    if hasattr(item, "anchor"):
+        anchor_uid = item.anchor().uid()
+    return {
+        "type": type(item).__name__,
+        "resource_url": resource_url,
+        "color": color,
+        "anchor_uid": anchor_uid,
+        "uid": item.uid() if hasattr(item, "uid") and callable(item.uid) else None,
+    }
+
+node = layerstack.get_node_by_uid(params["uid"])
+supported = (
+    layerstack.FillLayerNode,
+    layerstack.FillEffectNode,
+    layerstack.GeneratorEffectNode,
+    layerstack.FilterEffectNode,
+)
+if not isinstance(node, supported):
+    raise TypeError(f"Node {params['uid']} has no supported procedural source")
+source, channel_name = resolve_source(node, params.get("channel"))
+if not hasattr(source, "image_inputs") or not hasattr(source, "get_source"):
+    raise TypeError(f"Fill source {type(source).__name__} has no procedural image inputs")
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "source_mode": getattr(getattr(node, "source_mode", None), "name", None),
+    "node_type": type(node).__name__,
+    "channel": channel_name,
+    "source_type": type(source).__name__,
+    "inputs": {
+        name: describe(source.get_source(name)) for name in source.image_inputs
+    },
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(code, {"uid": uid, "channel": channel})
+        )
+
+    def set_procedural_input(
+        self,
+        uid: int,
+        input_name: str,
+        resource_url: str | None = None,
+        channel: str | None = None,
+        reset: bool = False,
+    ) -> dict[str, Any]:
+        if not input_name.strip():
+            raise ValueError("input_name must be a non-empty identifier")
+        if reset == (resource_url is not None):
+            raise ValueError("Provide exactly one of resource_url or reset=true")
+        if resource_url is not None and not resource_url.startswith("resource://"):
+            raise ValueError("resource_url must start with resource://")
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.resource as resource
+import substance_painter.textureset as textureset
+
+def resolve_source(node, requested):
+    if isinstance(node, (layerstack.GeneratorEffectNode, layerstack.FilterEffectNode)):
+        if requested is not None:
+            raise ValueError("channel must be omitted for Generator/Filter effects")
+        source = node.get_source()
+        if source is None:
+            raise ValueError("Generator/Filter effect has no procedural source")
+        return source, None
+    if node.source_mode.name == "Material":
+        if requested is not None:
+            raise ValueError("channel must be omitted for a material-mode Fill")
+        return node.get_material_source(), None
+    if not requested:
+        raise ValueError("channel is required for a split-mode Fill")
+    aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+    name = requested if requested in textureset.ChannelType.__members__ else aliases.get(requested)
+    if not name or name not in textureset.ChannelType.__members__:
+        raise ValueError(f"Unknown channel: {requested}")
+    resolved = textureset.ChannelType.__members__[name]
+    if resolved not in node.active_channels:
+        raise ValueError(f"Channel is not active on this Fill: {requested}")
+    return node.get_source(resolved), resolved.name
+
+def describe(item):
+    resource_url = None
+    try:
+        resource_id = getattr(item, "resource_id", None)
+    except ValueError:
+        resource_id = None
+    if resource_id is not None:
+        try:
+            resource_url = resource_id.url()
+        except ValueError:
+            resource_url = None
+    color = None
+    if hasattr(item, "get_color"):
+        value = item.get_color()
+        color = {"value": list(value.value_raw), "color_space": str(value.color_space)}
+    anchor_uid = item.anchor().uid() if hasattr(item, "anchor") else None
+    return {
+        "type": type(item).__name__,
+        "resource_url": resource_url,
+        "color": color,
+        "anchor_uid": anchor_uid,
+        "uid": item.uid() if hasattr(item, "uid") and callable(item.uid) else None,
+    }
+
+node = layerstack.get_node_by_uid(params["uid"])
+supported = (
+    layerstack.FillLayerNode,
+    layerstack.FillEffectNode,
+    layerstack.GeneratorEffectNode,
+    layerstack.FilterEffectNode,
+)
+if not isinstance(node, supported):
+    raise TypeError(f"Node {params['uid']} has no supported procedural source")
+source, channel_name = resolve_source(node, params.get("channel"))
+if not hasattr(source, "image_inputs") or not hasattr(source, "get_source"):
+    raise TypeError(f"Fill source {type(source).__name__} has no procedural image inputs")
+if params["input_name"] not in source.image_inputs:
+    raise ValueError(f"Unknown procedural image input: {params['input_name']}")
+original = source.get_source(params["input_name"])
+original_invalid_resource = False
+try:
+    original_resource = getattr(original, "resource_id", None)
+except ValueError:
+    original_resource = None
+    original_invalid_resource = True
+original_color = original.get_color() if hasattr(original, "get_color") else None
+original_anchor = original.anchor() if hasattr(original, "anchor") else None
+if (original_resource is None and original_color is None and original_anchor is None
+        and not original_invalid_resource):
+    raise TypeError(f"Cannot safely restore source type: {type(original).__name__}")
+try:
+    if params.get("resource_url") is not None:
+        resource_id = resource.ResourceID.from_url(params["resource_url"])
+        if not resource.Resource.retrieve(resource_id):
+            raise ValueError(f"Resource not found: {params['resource_url']}")
+        updated = source.set_source(params["input_name"], resource_id)
+    else:
+        source.reset_source(params["input_name"])
+        updated = source.get_source(params["input_name"])
+except Exception:
+    try:
+        if original_resource is not None:
+            source.set_source(params["input_name"], original_resource)
+        elif original_color is not None:
+            source.set_source(params["input_name"], original_color)
+        elif original_anchor is not None:
+            source.set_source(params["input_name"], original_anchor)
+        else:
+            source.reset_source(params["input_name"])
+    except Exception:
+        pass
+    raise
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "source_mode": getattr(getattr(node, "source_mode", None), "name", None),
+    "node_type": type(node).__name__,
+    "channel": channel_name,
+    "input_name": params["input_name"],
+    "source": describe(updated),
+    "reset": params["resource_url"] is None,
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "uid": uid,
+                    "input_name": input_name,
+                    "resource_url": resource_url,
+                    "channel": channel,
+                },
+            )
+        )
+
     def set_fill_resource(
         self,
         uid: int,
@@ -3072,6 +3405,95 @@ result = {
             raise IOError(f"Texture export verification failed for {len(failed)} file(s)")
         return result
 
+    def import_project_resource(
+        self,
+        file_path: str,
+        usage: str,
+        name: str | None = None,
+        group: str | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        return self._import_resource(file_path, usage, name, group, "project", confirm)
+
+    def import_session_resource(
+        self,
+        file_path: str,
+        usage: str,
+        name: str | None = None,
+        group: str | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        return self._import_resource(file_path, usage, name, group, "session", confirm)
+
+    def _import_resource(
+        self,
+        file_path: str,
+        usage: str,
+        name: str | None,
+        group: str | None,
+        scope: str,
+        confirm: bool,
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError(f"{scope.title()} resource import requires confirm=true")
+        normalized_usage = usage.strip().upper()
+        if normalized_usage not in SAFE_RESOURCE_IMPORT_USAGES:
+            allowed = ", ".join(sorted(SAFE_RESOURCE_IMPORT_USAGES))
+            raise ValueError(f"usage must be one of the safe import usages: {allowed}")
+        for label, value in (("name", name), ("group", group)):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{label} must be a non-empty string when supplied")
+        input_path = self._validate_resource_import_path(file_path)
+        code = '''
+import substance_painter.project as project
+import substance_painter.resource as resource
+
+if params["scope"] == "project":
+    if not project.is_open():
+        raise RuntimeError("No project is open")
+    if project.is_busy():
+        raise RuntimeError("Painter is busy and cannot import a project resource")
+usage = resource.Usage.__members__[params["usage"]]
+if params["scope"] == "project":
+    item = resource.import_project_resource(
+        params["file_path"], usage, params.get("name"), params.get("group")
+    )
+else:
+    item = resource.import_session_resource(
+        params["file_path"], usage, params.get("name"), params.get("group")
+    )
+identifier = item.identifier()
+retrieved = resource.Resource.retrieve(identifier)
+result = {
+    "scope": params["scope"],
+    "source_path": params["file_path"],
+    "url": identifier.url(),
+    "name": identifier.name,
+    "context": identifier.context,
+    "version": identifier.version,
+    "location": item.location().name,
+    "type": item.type().name,
+    "category": item.category(),
+    "usages": [value.name for value in item.usages()],
+    "verified": any(candidate.identifier() == identifier for candidate in retrieved),
+}
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "scope": scope,
+                    "file_path": input_path.as_posix(),
+                    "usage": normalized_usage,
+                    "name": name,
+                    "group": group,
+                },
+            )
+        )
+        if not result.get("verified"):
+            raise IOError(f"Painter resource import could not be verified: {input_path}")
+        return result
+
     def list_project_resources(self) -> dict[str, Any]:
         code = '''
 import substance_painter.resource as resource
@@ -3711,6 +4133,19 @@ result = {"uid": node.uid(), "layer": node.get_name(), "kind": params["kind"]}
         if not mesh.is_file():
             raise FileNotFoundError(f"Baking mesh input does not exist: {mesh}")
         return mesh
+
+    @classmethod
+    def _validate_resource_import_path(cls, file_path: str) -> Path:
+        resource_path = cls._validate_allowed_path(
+            file_path, "SP_MCP_RESOURCE_ROOTS", "Resource import"
+        )
+        if resource_path.suffix.casefold() in BLOCKED_RESOURCE_EXTENSIONS:
+            raise ValueError(
+                f"Executable or script-like resource files are not allowed: {resource_path.suffix}"
+            )
+        if not resource_path.is_file():
+            raise FileNotFoundError(f"Resource file does not exist: {resource_path}")
+        return resource_path
 
     @staticmethod
     def _validate_color(color: list[float]) -> None:

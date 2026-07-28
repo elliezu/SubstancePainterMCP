@@ -81,6 +81,47 @@ def test_resource_search_transports_server_side_filters():
     }
 
 
+def test_resource_import_requires_confirmation_and_safe_usage(tmp_path, monkeypatch):
+    source = tmp_path / "texture.png"
+    source.write_bytes(b"png")
+    monkeypatch.setenv("SP_MCP_RESOURCE_ROOTS", str(tmp_path))
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.import_project_resource(str(source), "TEXTURE")
+    with pytest.raises(ValueError, match="safe import usages"):
+        operations.import_project_resource(str(source), "SHADER", confirm=True)
+    assert operations.remote.calls == []
+
+
+def test_resource_import_rejects_script_like_files(tmp_path, monkeypatch):
+    source = tmp_path / "payload.py"
+    source.write_text("pass")
+    monkeypatch.setenv("SP_MCP_RESOURCE_ROOTS", str(tmp_path))
+    with pytest.raises(ValueError, match="script-like"):
+        PainterOperations(FakeRemote()).import_session_resource(
+            str(source), "TEXTURE", confirm=True
+        )
+
+
+def test_project_and_session_resource_import_transport(tmp_path, monkeypatch):
+    source = tmp_path / "texture.png"
+    source.write_bytes(b"png")
+    monkeypatch.setenv("SP_MCP_RESOURCE_ROOTS", str(tmp_path))
+    response = {"success": True, "data": {"verified": True, "url": "resource://test/item"}}
+    for scope in ("project", "session"):
+        remote = FakeRemote(response)
+        operations = PainterOperations(remote)
+        method = getattr(operations, f"import_{scope}_resource")
+        assert method(str(source), "texture", "Imported", "MCP", True)["verified"]
+        assert remote.calls[0][1] == {
+            "scope": scope,
+            "file_path": source.resolve().as_posix(),
+            "usage": "TEXTURE",
+            "name": "Imported",
+            "group": "MCP",
+        }
+
+
 def test_active_channels_rejects_empty_or_duplicate_values():
     operations = PainterOperations(FakeRemote())
     with pytest.raises(ValueError, match="at least one"):
@@ -188,6 +229,42 @@ def test_fill_resource_requires_channel_or_material_mode():
         operations.set_fill_resource(
             1, "resource://project/a", "BaseColor", material_mode=True
         )
+
+
+def test_procedural_input_requires_exactly_one_action():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="exactly one"):
+        operations.set_procedural_input(1, "input")
+    with pytest.raises(ValueError, match="exactly one"):
+        operations.set_procedural_input(
+            1, "input", "resource://project/a", reset=True
+        )
+    with pytest.raises(ValueError, match="resource://"):
+        operations.set_procedural_input(1, "input", "C:/texture.png")
+    assert operations.remote.calls == []
+
+
+def test_procedural_input_tools_transport_source_context():
+    remote = FakeRemote()
+    operations = PainterOperations(remote)
+    operations.get_procedural_inputs(7, "BaseColor")
+    operations.set_procedural_input(
+        7, "input", "resource://project0/image", "BaseColor"
+    )
+    operations.set_procedural_input(7, "input", channel="BaseColor", reset=True)
+    assert remote.calls[0][1] == {"uid": 7, "channel": "BaseColor"}
+    assert remote.calls[1][1] == {
+        "uid": 7,
+        "input_name": "input",
+        "resource_url": "resource://project0/image",
+        "channel": "BaseColor",
+    }
+    assert remote.calls[2][1] == {
+        "uid": 7,
+        "input_name": "input",
+        "resource_url": None,
+        "channel": "BaseColor",
+    }
 
 
 def test_async_mutations_require_confirmation():
@@ -331,6 +408,30 @@ def test_baking_mesh_inputs_transport_file_urls(monkeypatch, tmp_path):
         "cage_url": cage.resolve().as_uri(),
         "low_as_high": False,
         "cage_mode": "Custom file",
+    }
+
+
+def test_baking_resource_input_validation_and_transport():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.set_baking_resource_input("Body", "OffsetMap", clear=True)
+    with pytest.raises(ValueError, match="exactly one"):
+        operations.set_baking_resource_input(
+            "Body", "OffsetMap", "resource://project0/map", clear=True, confirm=True
+        )
+    with pytest.raises(ValueError, match="resource://"):
+        operations.set_baking_resource_input(
+            "Body", "OffsetMap", "C:/map.png", confirm=True
+        )
+    remote = FakeRemote()
+    PainterOperations(remote).set_baking_resource_input(
+        "Body", "OffsetMap", "resource://project0/map", confirm=True
+    )
+    assert remote.calls[0][1] == {
+        "texture_set": "Body",
+        "parameter": "OffsetMap",
+        "resource_url": "resource://project0/map",
+        "baker": None,
     }
 
 

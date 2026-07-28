@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.8.0 - 2026-07-28
+
+Version 0.8.0 expands the server from 65 to 70 tools and closes the filesystem-to-Painter resource pipeline without weakening the server's approved-root model.
+
+### Sandboxed resource ingestion
+
+- Added `import_project_resource` and `import_session_resource` with the independent `SP_MCP_RESOURCE_ROOTS` allowlist.
+- Required explicit `confirm=true`, an existing regular file, and one of 14 safe visual/content usages.
+- Excluded shader, particle script, receiver/emitter, and other executable-oriented usages; also rejected common executable and script-like file extensions before contacting Painter.
+- Supported optional Painter resource names and groups while transporting every value through the existing JSON parameter channel.
+- Returned context, versioned `resource://` URL, location, Painter type, category, usages, and source path.
+- Re-retrieved the exact returned ResourceID and failed the operation if post-import verification could not find it.
+
+### Procedural image inputs
+
+- Added `get_procedural_inputs` for Fill layers, Fill effects, Generator effects, and Filter effects.
+- Described each graph image input as a bitmap ResourceID, uniform color with color space, or Anchor Point UID.
+- Added `set_procedural_input` for verified `resource://` connections and reset-to-default behavior.
+- Snapshotted bitmap, color, or Anchor sources and restored the original input if Painter rejected a new assignment.
+- Kept scalar/vector procedural parameters in `set_fill_parameters`; filesystem-backed graphs now use the dedicated import and image-input tools.
+
+### Baking Resource properties and Painter 12.1 capability reporting
+
+- Added `set_baking_resource_input` for common or per-baker properties whose runtime widget type is `Resource`.
+- Verified the ResourceID before mutation, required explicit confirmation, reported linked Texture Set impact, and rolled back on failure.
+- Live-tested Painter 12.1's common `OffsetMap` skew-correction resource input.
+- Added explicit runtime capabilities for resource import, procedural image inputs, baking Resource inputs, auto-rebake control, and skew-painting control.
+- Confirmed that Painter 12.1.1 exposes skew-related bake properties but no public Python control for Auto Rebake or entering Skew Painting mode; those UI-only controls therefore report `false` instead of relying on fragile UI automation.
+
+### Validation
+
+- Expanded the automated suite from 49 to 55 tests and verified all 70 FastMCP schemas.
+- Imported one PNG into both project and session contexts and re-retrieved both exact versioned identities.
+- Connected the project image to linked baking `OffsetMap`, a temporary Fill's Base Color, and a Mask Editor Generator's `texture` image input.
+- Verified the Generator transition from a raw uniform color to a project bitmap and back to the same default uniform color.
+- Cleared the Offset Map, deleted temporary layer content, and confirmed exact layer-tree SHA-256 restoration.
+
 ## 0.7.0 - 2026-07-28
 
 Version 0.7.0 expands the server from 60 to 65 tools and turns the existing asynchronous bake primitive into a production-oriented, multi-Texture-Set baking workflow.

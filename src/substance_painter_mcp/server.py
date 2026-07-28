@@ -104,6 +104,21 @@ def set_baking_mesh_inputs(
 
 
 @mcp.tool()
+def set_baking_resource_input(
+    texture_set: str,
+    parameter: str,
+    resource_url: str | None = None,
+    baker: str | None = None,
+    clear: bool = False,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Set or clear a Resource-typed common/per-baker input transactionally."""
+    return operations.set_baking_resource_input(
+        texture_set, parameter, resource_url, baker, clear, confirm
+    )
+
+
+@mcp.tool()
 def capture_baking_preset(
     texture_set: str, bakers: list[str] | None = None
 ) -> dict[str, Any]:
@@ -350,6 +365,24 @@ def get_fill_sources(uid: int) -> dict[str, Any]:
 
 
 @mcp.tool()
+def get_procedural_inputs(uid: int, channel: str | None = None) -> dict[str, Any]:
+    """Inspect image inputs on Fill, Fill Effect, Generator, or Filter sources."""
+    return operations.get_procedural_inputs(uid, channel)
+
+
+@mcp.tool()
+def set_procedural_input(
+    uid: int,
+    input_name: str,
+    resource_url: str | None = None,
+    channel: str | None = None,
+    reset: bool = False,
+) -> dict[str, Any]:
+    """Connect a resource to a procedural image input or reset it to its default."""
+    return operations.set_procedural_input(uid, input_name, resource_url, channel, reset)
+
+
+@mcp.tool()
 def get_fill_parameters(uid: int, channel: str | None = None) -> dict[str, Any]:
     """Inspect procedural parameters, metadata, and presets for a Fill source."""
     return operations.get_fill_parameters(uid, channel)
@@ -560,6 +593,30 @@ def export_with_profile(
     return operations.export_with_profile(
         output_directory, profile, texture_sets, size_log2, overwrite
     )
+
+
+@mcp.tool()
+def import_project_resource(
+    file_path: str,
+    usage: str,
+    name: str | None = None,
+    group: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Import and verify a sandboxed resource inside the open Painter project."""
+    return operations.import_project_resource(file_path, usage, name, group, confirm)
+
+
+@mcp.tool()
+def import_session_resource(
+    file_path: str,
+    usage: str,
+    name: str | None = None,
+    group: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Import and verify a sandboxed resource for the current Painter session."""
+    return operations.import_session_resource(file_path, usage, name, group, confirm)
 
 
 @mcp.tool()
