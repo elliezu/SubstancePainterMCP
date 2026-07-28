@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.5.0 - 2026-07-28
+
+Version 0.5.0 expands the server from 44 to 53 tools and closes two major automation gaps: resource-driven Fill authoring and observable long-running Painter jobs.
+
+### Fill resources and advanced projections
+
+- Added `get_fill_sources` to inspect material-mode and per-channel Fill sources, including resource URLs, uniform colors, source types, and source UIDs.
+- Added `set_fill_resource` for per-channel procedural/bitmap resources and whole-material resources.
+- Added local URL and channel-mode validation, automatic channel activation, and rollback of active-channel/source state if a channel assignment fails.
+- Expanded `get_fill_projection` with shape crop, projection angle, 3D transforms, and depth/backface culling.
+- Added `set_fill_projection_advanced` for UV, Triplanar, Planar, Spherical, and Cylindrical modes.
+- Validated filtering, wrapping, crop mode, vector dimensions, positive scales, numeric ranges, and mode-specific transform restrictions before contacting Painter.
+- Restored both the prior projection mode and parameters if a projection update fails.
+
+### Asynchronous baking
+
+- Added `start_bake` with explicit `confirm=true`, optional verified project-copy backup, and preflight rejection of disabled Texture Sets or empty UV-tile selections.
+- Added `get_bake_job` with persistent job ID, progress, busy state, timestamps, cancellation state, and terminal result.
+- Added `cancel_bake` using Painter's cooperative `StopSource` API.
+- Bridged `BakingProcessAboutToStart`, `BakingProcessProgress`, and `BakingProcessEnded` without holding an MCP/HTTP request open for the duration of a bake.
+
+### Mesh reload workflow
+
+- Added `plan_mesh_reload` with approved input roots, extension/existence checks, mesh size, current mesh, Texture Set/UV tile inventory, settings, and backup preflight.
+- Added `start_mesh_reload` with explicit confirmation, optional verified `.spp` backup, camera/stroke-preservation options, and asynchronous completion tracking.
+- Added `get_mesh_reload_job` with prior/new Texture Set lists and added/removed name diffs.
+- Added `SP_MCP_MESH_ROOTS` so mesh inputs are independently sandboxed from exports and project backups.
+
+### Validation
+
+- Expanded the automated suite from 33 to 37 tests and verified all 53 FastMCP schemas.
+- Live-tested a starter procedural Texture as a Base Color Fill source and verified the resulting `SourceSubstance` URL.
+- Live-tested Planar filtering/wrapping, UV/3D transforms, depth/backface culling, plus Spherical, Cylindrical, and Triplanar mode-specific parameters and round-trip inspection.
+- Started a bake on an enabled Texture Set, requested cancellation, and observed a terminal `cancelled` event with Painter returning to idle.
+- Reloaded the same 5,571,148-byte FBX with `preserve_strokes=true`; Painter reported success and the three Texture Set names were unchanged.
+- Removed each temporary Fill layer and verified exact layer-tree digest restoration after authoring tests.
+
 ## 0.4.0 - 2026-07-28
 
 Version 0.4.0 expands the server from 36 to 44 tools and adds safe geometry-aware authoring, preflighted recipe execution, Smart asset application, and Fill projection control.

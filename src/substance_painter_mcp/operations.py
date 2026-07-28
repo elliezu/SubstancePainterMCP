@@ -124,8 +124,11 @@ result = {
         "smart_mask_insertion": hasattr(layerstack, "insert_smart_mask"),
         "predefined_export_presets": hasattr(export, "list_predefined_export_presets"),
         "async_baking": hasattr(baking, "bake_selected_textures_async"),
+        "bake_cancellation": hasattr(baking, "StopSource"),
         "auto_unwrap_settings": hasattr(project, "AutoUnwrapUVTilesSettings"),
+        "mesh_reload": hasattr(project, "reload_mesh"),
         "save_project_copy": hasattr(project, "save_as_copy"),
+        "advanced_fill_projection": hasattr(layerstack, "Projection3DParams"),
     },
 }
 '''
@@ -241,6 +244,319 @@ result = {"busy": project.is_busy(), "texture_sets": entries}
         return _unwrap(
             self.remote.execute_python_json(code, {"texture_set": texture_set})
         )
+
+    def start_bake(
+        self,
+        texture_set: str,
+        confirm: bool = False,
+        backup_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+    ) -> dict[str, Any]:
+        if not texture_set.strip():
+            raise ValueError("texture_set must be a non-empty name")
+        if not confirm:
+            raise PermissionError("Baking modifies mesh maps; set confirm=true to start")
+        backup = (
+            self.save_project_copy(backup_path, backup_mode, overwrite_backup)
+            if backup_path
+            else None
+        )
+        code = '''
+import builtins
+import time
+import uuid
+import substance_painter.baking as baking
+import substance_painter.event as event
+import substance_painter.project as project
+import substance_painter.textureset as textureset
+
+if not project.is_open():
+    raise RuntimeError("No project is open")
+if project.is_busy():
+    raise RuntimeError("Painter is busy")
+target = textureset.TextureSet.from_name(params["texture_set"])
+bake_settings = baking.BakingParameters.from_texture_set(target)
+if not bake_settings.is_textureset_enabled() or not bake_settings.get_enabled_uv_tiles():
+    raise RuntimeError(
+        f"Texture Set is disabled for baking or has no enabled UV tiles: {params['texture_set']}"
+    )
+previous_refs = getattr(builtins, "_sp_mcp_bake_refs", None)
+if previous_refs:
+    for event_cls, callback in previous_refs:
+        try:
+            event.DISPATCHER.disconnect(event_cls, callback)
+        except Exception:
+            pass
+
+job_id = uuid.uuid4().hex
+state = {
+    "job_id": job_id,
+    "operation": "bake",
+    "texture_set": params["texture_set"],
+    "status": "starting",
+    "progress": 0.0,
+    "cancel_requested": False,
+    "started_at": time.time(),
+    "finished_at": None,
+    "error": None,
+}
+builtins._sp_mcp_bake_state = state
+
+def on_about_to_start(message):
+    current = getattr(builtins, "_sp_mcp_bake_state", None)
+    if current is state:
+        state["status"] = "running"
+
+def on_progress(message):
+    current = getattr(builtins, "_sp_mcp_bake_state", None)
+    if current is state:
+        state["status"] = "running"
+        state["progress"] = max(0.0, min(1.0, float(message.progress)))
+
+def on_ended(message):
+    current = getattr(builtins, "_sp_mcp_bake_state", None)
+    if current is state:
+        status = message.status.name
+        state["status"] = {
+            "Success": "success", "Cancel": "cancelled", "Fail": "failed"
+        }.get(status, status.casefold())
+        state["progress"] = 1.0 if status == "Success" else state["progress"]
+        state["finished_at"] = time.time()
+
+refs = [
+    (event.BakingProcessAboutToStart, on_about_to_start),
+    (event.BakingProcessProgress, on_progress),
+    (event.BakingProcessEnded, on_ended),
+]
+for event_cls, callback in refs:
+    event.DISPATCHER.connect_strong(event_cls, callback)
+builtins._sp_mcp_bake_refs = refs
+try:
+    stop_source = baking.bake_async(target)
+    builtins._sp_mcp_bake_stop_source = stop_source
+    if state["status"] == "starting":
+        state["status"] = "running"
+except Exception as exc:
+    state["status"] = "failed"
+    state["error"] = f"{type(exc).__name__}: {exc}"
+    state["finished_at"] = time.time()
+    raise
+result = dict(state)
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(code, {"texture_set": texture_set})
+        )
+        result["backup"] = backup
+        return result
+
+    def get_bake_job(self, job_id: str | None = None) -> dict[str, Any]:
+        code = '''
+import builtins
+import substance_painter.project as project
+state = getattr(builtins, "_sp_mcp_bake_state", None)
+if state is None:
+    result = {"found": False, "job": None, "busy": project.is_busy()}
+elif params.get("job_id") and state["job_id"] != params["job_id"]:
+    result = {"found": False, "job": None, "busy": project.is_busy()}
+else:
+    result = {"found": True, "job": dict(state), "busy": project.is_busy()}
+'''
+        return _unwrap(self.remote.execute_python_json(code, {"job_id": job_id}))
+
+    def cancel_bake(self, job_id: str) -> dict[str, Any]:
+        if not job_id.strip():
+            raise ValueError("job_id must be non-empty")
+        code = '''
+import builtins
+state = getattr(builtins, "_sp_mcp_bake_state", None)
+stop_source = getattr(builtins, "_sp_mcp_bake_stop_source", None)
+if state is None or state["job_id"] != params["job_id"]:
+    raise ValueError(f"Unknown bake job: {params['job_id']}")
+if state["status"] not in {"starting", "running"}:
+    requested = False
+else:
+    requested = bool(stop_source and stop_source.request_stop())
+    state["cancel_requested"] = requested or bool(
+        stop_source and stop_source.stop_requested()
+    )
+result = {"requested": requested, "job": dict(state)}
+'''
+        return _unwrap(self.remote.execute_python_json(code, {"job_id": job_id}))
+
+    def plan_mesh_reload(
+        self,
+        mesh_file_path: str,
+        backup_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+        preserve_strokes: bool = True,
+        import_cameras: bool = True,
+    ) -> dict[str, Any]:
+        mesh = self._validate_mesh_path(mesh_file_path)
+        backup = None
+        if backup_path:
+            backup_file = self._validate_allowed_path(
+                backup_path, "SP_MCP_PROJECT_ROOTS", "Mesh reload backup"
+            )
+            if backup_file.suffix.casefold() != ".spp":
+                raise ValueError("backup_path must use the .spp extension")
+            if backup_file.exists() and not overwrite_backup:
+                raise FileExistsError(
+                    "Backup already exists; set overwrite_backup=true to replace it: "
+                    f"{backup_file}"
+                )
+            if backup_mode not in {"Incremental", "Full"}:
+                raise ValueError("backup_mode must be Incremental or Full")
+            backup = {
+                "path": str(backup_file),
+                "mode": backup_mode,
+                "overwrite": overwrite_backup,
+            }
+        code = '''
+import substance_painter.project as project
+import substance_painter.textureset as textureset
+if not project.is_open():
+    raise RuntimeError("No project is open")
+sets = []
+for item in textureset.all_texture_sets():
+    name = item.name() if callable(item.name) else item.name
+    sets.append({
+        "name": name,
+        "uv_tiles": [str(tile) for tile in item.all_uv_tiles()],
+        "stacks": [stack.name() for stack in item.all_stacks()],
+    })
+result = {
+    "busy": project.is_busy(),
+    "current_mesh": project.last_imported_mesh_path(),
+    "texture_sets": sets,
+}
+'''
+        current = _unwrap(self.remote.execute_python_json(code))
+        return {
+            "mesh_file_path": str(mesh),
+            "bytes": mesh.stat().st_size,
+            "preserve_strokes": preserve_strokes,
+            "import_cameras": import_cameras,
+            "backup": backup,
+            "current": current,
+            "requires_confirmation": True,
+        }
+
+    def start_mesh_reload(
+        self,
+        mesh_file_path: str,
+        confirm: bool = False,
+        backup_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+        preserve_strokes: bool = True,
+        import_cameras: bool = True,
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError("Mesh reload modifies the project; set confirm=true to start")
+        plan = self.plan_mesh_reload(
+            mesh_file_path,
+            backup_path,
+            backup_mode,
+            overwrite_backup,
+            preserve_strokes,
+            import_cameras,
+        )
+        backup = (
+            self.save_project_copy(backup_path, backup_mode, overwrite_backup)
+            if backup_path
+            else None
+        )
+        code = '''
+import builtins
+import time
+import uuid
+import substance_painter.project as project
+import substance_painter.textureset as textureset
+
+if project.is_busy():
+    raise RuntimeError("Painter is busy")
+job_id = uuid.uuid4().hex
+before_sets = [
+    item.name() if callable(item.name) else item.name
+    for item in textureset.all_texture_sets()
+]
+state = {
+    "job_id": job_id,
+    "operation": "mesh_reload",
+    "status": "running",
+    "mesh_file_path": params["mesh_file_path"],
+    "previous_mesh": project.last_imported_mesh_path(),
+    "preserve_strokes": params["preserve_strokes"],
+    "import_cameras": params["import_cameras"],
+    "started_at": time.time(),
+    "finished_at": None,
+    "texture_sets_before": before_sets,
+    "texture_sets_after": None,
+    "added_texture_sets": [],
+    "removed_texture_sets": [],
+    "error": None,
+}
+builtins._sp_mcp_mesh_reload_state = state
+
+def on_loaded(status):
+    current = getattr(builtins, "_sp_mcp_mesh_reload_state", None)
+    if current is not state:
+        return
+    after_sets = [
+        item.name() if callable(item.name) else item.name
+        for item in textureset.all_texture_sets()
+    ]
+    state["status"] = "success" if status.name == "SUCCESS" else "failed"
+    state["finished_at"] = time.time()
+    state["texture_sets_after"] = after_sets
+    state["added_texture_sets"] = sorted(set(after_sets) - set(before_sets))
+    state["removed_texture_sets"] = sorted(set(before_sets) - set(after_sets))
+    if status.name != "SUCCESS":
+        state["error"] = f"Painter mesh reload status: {status.name}"
+
+builtins._sp_mcp_mesh_reload_callback = on_loaded
+settings = project.MeshReloadingSettings(
+    import_cameras=params["import_cameras"],
+    preserve_strokes=params["preserve_strokes"],
+)
+try:
+    project.reload_mesh(params["mesh_file_path"], settings, on_loaded)
+except Exception as exc:
+    state["status"] = "failed"
+    state["error"] = f"{type(exc).__name__}: {exc}"
+    state["finished_at"] = time.time()
+    raise
+result = dict(state)
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "mesh_file_path": Path(mesh_file_path).expanduser().resolve().as_posix(),
+                    "preserve_strokes": preserve_strokes,
+                    "import_cameras": import_cameras,
+                },
+            )
+        )
+        result["backup"] = backup
+        result["plan"] = plan
+        return result
+
+    def get_mesh_reload_job(self, job_id: str | None = None) -> dict[str, Any]:
+        code = '''
+import builtins
+import substance_painter.project as project
+state = getattr(builtins, "_sp_mcp_mesh_reload_state", None)
+if state is None:
+    result = {"found": False, "job": None, "busy": project.is_busy()}
+elif params.get("job_id") and state["job_id"] != params["job_id"]:
+    result = {"found": False, "job": None, "busy": project.is_busy()}
+else:
+    result = {"found": True, "job": dict(state), "busy": project.is_busy()}
+'''
+        return _unwrap(self.remote.execute_python_json(code, {"job_id": job_id}))
 
     def list_layers(
         self,
@@ -957,6 +1273,9 @@ if not isinstance(node, layerstack.FillLayerNode):
     raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
 projection = node.get_projection_parameters()
 transform = getattr(projection, "uv_transformation", None) if projection else None
+projection_3d = getattr(projection, "projection_3d", None) if projection else None
+depth_culling = getattr(projection, "depth_culling", None) if projection else None
+backface_culling = getattr(projection, "backface_culling", None) if projection else None
 result = {
     "uid": node.uid(),
     "name": node.get_name(),
@@ -964,12 +1283,28 @@ result = {
     "filtering_mode": getattr(getattr(projection, "filtering_mode", None), "name", None),
     "uv_wrapping_mode": getattr(getattr(projection, "uv_wrapping_mode", None), "name", None),
     "hardness": getattr(projection, "hardness", None),
+    "shape_crop_mode": getattr(getattr(projection, "shape_crop_mode", None), "name", None),
+    "angle": getattr(projection, "angle", None),
+    "backface_culling_angle": getattr(projection, "backface_culling_angle", None),
     "transform": ({
         "scale_mode": transform.scale_mode.name,
         "scale": list(transform.scale) if transform.scale is not None else None,
         "rotation": transform.rotation,
         "offset": list(transform.offset) if transform.offset is not None else None,
     } if transform else None),
+    "projection_3d": ({
+        "offset": list(projection_3d.offset),
+        "rotation": list(projection_3d.rotation),
+        "scale": list(projection_3d.scale),
+    } if projection_3d else None),
+    "depth_culling": ({
+        "enabled": depth_culling.enabled,
+        "hardness": depth_culling.hardness,
+    } if depth_culling else None),
+    "backface_culling": ({
+        "enabled": backface_culling.enabled,
+        "hardness": backface_culling.hardness,
+    } if backface_culling else None),
 }
 '''
         return _unwrap(self.remote.execute_python_json(code, {"uid": uid}))
@@ -1021,10 +1356,9 @@ try:
         )
         node.set_projection_parameters(dataclasses.replace(projection, uv_transformation=transform))
 except Exception:
+    node.set_projection_mode(original_mode)
     if original_params is not None:
         node.set_projection_parameters(original_params)
-    else:
-        node.set_projection_mode(original_mode)
     raise
 projection = node.get_projection_parameters()
 transform = getattr(projection, "uv_transformation", None) if projection else None
@@ -1049,6 +1383,226 @@ result = {
                     "scale": scale,
                     "rotation": rotation,
                     "offset": offset,
+                },
+            )
+        )
+
+    def set_fill_projection_advanced(
+        self,
+        uid: int,
+        mode: str,
+        settings: dict[str, Any],
+    ) -> dict[str, Any]:
+        supported = {"UV", "Triplanar", "Planar", "Spherical", "Cylindrical"}
+        if mode not in supported:
+            raise ValueError(f"mode must be one of: {', '.join(sorted(supported))}")
+        if not isinstance(settings, dict):
+            raise ValueError("settings must be an object")
+        self._validate_projection_settings(mode, settings)
+        code = '''
+import dataclasses
+import substance_painter.layerstack as layerstack
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+original_mode = node.get_projection_mode()
+original_params = node.get_projection_parameters()
+try:
+    node.set_projection_mode(layerstack.ProjectionMode.__members__[params["mode"]])
+    projection = node.get_projection_parameters()
+    values = params["settings"]
+    changes = {}
+    if values.get("filtering_mode") is not None:
+        changes["filtering_mode"] = layerstack.FilteringMode.__members__[values["filtering_mode"]]
+    if values.get("uv_wrapping_mode") is not None:
+        changes["uv_wrapping_mode"] = layerstack.UVWrapMode.__members__[values["uv_wrapping_mode"]]
+    if values.get("shape_crop_mode") is not None:
+        changes["shape_crop_mode"] = layerstack.ShapeCropMode.__members__[values["shape_crop_mode"]]
+    if values.get("hardness") is not None:
+        changes["hardness"] = values["hardness"]
+    if values.get("angle") is not None:
+        changes["angle"] = values["angle"]
+    if values.get("backface_culling_angle") is not None:
+        changes["backface_culling_angle"] = values["backface_culling_angle"]
+    transform_values = values.get("transform") or {}
+    if transform_values:
+        transform = projection.uv_transformation
+        transform = dataclasses.replace(
+            transform,
+            scale=transform_values.get("scale", transform.scale),
+            rotation=transform_values.get("rotation", transform.rotation),
+            offset=transform_values.get("offset", transform.offset),
+        )
+        changes["uv_transformation"] = transform
+    projection_3d_values = values.get("projection_3d") or {}
+    if projection_3d_values:
+        projection_3d = projection.projection_3d
+        projection_3d = dataclasses.replace(
+            projection_3d,
+            offset=projection_3d_values.get("offset", projection_3d.offset),
+            rotation=projection_3d_values.get("rotation", projection_3d.rotation),
+            scale=projection_3d_values.get("scale", projection_3d.scale),
+        )
+        changes["projection_3d"] = projection_3d
+    for key in ("depth_culling", "backface_culling"):
+        culling_values = values.get(key) or {}
+        if culling_values:
+            current = getattr(projection, key)
+            changes[key] = dataclasses.replace(
+                current,
+                enabled=culling_values.get("enabled", current.enabled),
+                hardness=culling_values.get("hardness", current.hardness),
+            )
+    node.set_projection_parameters(dataclasses.replace(projection, **changes))
+except Exception:
+    node.set_projection_mode(original_mode)
+    if original_params is not None:
+        node.set_projection_parameters(original_params)
+    raise
+projection = node.get_projection_parameters()
+transform = projection.uv_transformation
+projection_3d = getattr(projection, "projection_3d", None)
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "mode": node.get_projection_mode().name,
+    "transform": {
+        "scale": list(transform.scale) if transform.scale is not None else None,
+        "rotation": transform.rotation,
+        "offset": list(transform.offset) if transform.offset is not None else None,
+    },
+    "projection_3d": ({
+        "offset": list(projection_3d.offset),
+        "rotation": list(projection_3d.rotation),
+        "scale": list(projection_3d.scale),
+    } if projection_3d else None),
+    "filtering_mode": getattr(getattr(projection, "filtering_mode", None), "name", None),
+    "uv_wrapping_mode": getattr(getattr(projection, "uv_wrapping_mode", None), "name", None),
+    "shape_crop_mode": getattr(getattr(projection, "shape_crop_mode", None), "name", None),
+    "hardness": getattr(projection, "hardness", None),
+    "angle": getattr(projection, "angle", None),
+    "backface_culling_angle": getattr(projection, "backface_culling_angle", None),
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code, {"uid": uid, "mode": mode, "settings": settings}
+            )
+        )
+
+    def get_fill_sources(self, uid: int) -> dict[str, Any]:
+        code = '''
+import substance_painter.layerstack as layerstack
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+
+def describe(source):
+    resource_id = getattr(source, "resource_id", None)
+    color = None
+    if hasattr(source, "get_color"):
+        value = source.get_color()
+        color = {
+            "value": list(value.value_raw),
+            "color_space": str(value.color_space),
+        }
+    return {
+        "type": type(source).__name__,
+        "resource_url": resource_id.url() if resource_id else None,
+        "color": color,
+        "uid": source.uid() if hasattr(source, "uid") and callable(source.uid) else None,
+    }
+
+if node.source_mode.name == "Material":
+    material = describe(node.get_material_source())
+    channels = {}
+else:
+    material = None
+    channels = {
+        channel.name: describe(node.get_source(channel))
+        for channel in sorted(node.active_channels, key=lambda item: item.name)
+    }
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "source_mode": node.source_mode.name,
+    "material": material,
+    "channels": channels,
+}
+'''
+        return _unwrap(self.remote.execute_python_json(code, {"uid": uid}))
+
+    def set_fill_resource(
+        self,
+        uid: int,
+        resource_url: str,
+        channel: str | None = None,
+        material_mode: bool = False,
+    ) -> dict[str, Any]:
+        if not resource_url.startswith("resource://"):
+            raise ValueError("resource_url must start with resource://")
+        if material_mode and channel is not None:
+            raise ValueError("channel must be omitted when material_mode=true")
+        if not material_mode and not channel:
+            raise ValueError("channel is required when material_mode=false")
+        code = '''
+import substance_painter.layerstack as layerstack
+import substance_painter.resource as resource
+import substance_painter.textureset as textureset
+
+node = layerstack.get_node_by_uid(params["uid"])
+if not isinstance(node, layerstack.FillLayerNode):
+    raise TypeError(f"Node {params['uid']} is not a FillLayerNode")
+resource_id = resource.ResourceID.from_url(params["resource_url"])
+aliases = {"Roughness": "SpecularRoughness", "Metallic": "BaseMetalness", "Emission": "Emissive"}
+requested = params["channel"]
+channel_name = None if params["material_mode"] else (
+    requested if requested in textureset.ChannelType.__members__ else aliases.get(requested)
+)
+if not params["material_mode"] and (
+    not channel_name or channel_name not in textureset.ChannelType.__members__
+):
+    raise ValueError(f"Unknown channel: {requested}")
+resolved = textureset.ChannelType.__members__[channel_name] if channel_name else None
+original_channels = set(node.active_channels)
+original_source = node.get_source(resolved) if resolved in original_channels else None
+try:
+    if params["material_mode"]:
+        source = node.set_material_source(resource_id)
+        resolved_channel = None
+    else:
+        node.active_channels = original_channels | {resolved}
+        source = node.set_source(resolved, resource_id)
+        resolved_channel = resolved.name
+except Exception:
+    if resolved is not None:
+        if original_source is not None:
+            try:
+                node.set_source(resolved, original_source)
+            except Exception:
+                pass
+        node.active_channels = original_channels
+    raise
+verified_id = getattr(source, "resource_id", None)
+result = {
+    "uid": node.uid(),
+    "name": node.get_name(),
+    "source_mode": node.source_mode.name,
+    "channel": resolved_channel,
+    "source_type": type(source).__name__,
+    "resource_url": verified_id.url() if verified_id else params["resource_url"],
+}
+'''
+        return _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "uid": uid,
+                    "resource_url": resource_url,
+                    "channel": channel,
+                    "material_mode": material_mode,
                 },
             )
         )
@@ -1700,6 +2254,144 @@ result = {"original_project": original, "current_project": current}
             output_directory, "SP_MCP_EXPORT_ROOTS", "Texture export"
         )
 
+    @staticmethod
+    def _validate_projection_settings(mode: str, settings: dict[str, Any]) -> None:
+        allowed = {
+            "filtering_mode",
+            "uv_wrapping_mode",
+            "shape_crop_mode",
+            "hardness",
+            "angle",
+            "backface_culling_angle",
+            "transform",
+            "projection_3d",
+            "depth_culling",
+            "backface_culling",
+        }
+        unknown = sorted(set(settings) - allowed)
+        if unknown:
+            raise ValueError(f"Unknown projection settings: {', '.join(unknown)}")
+        supported_by_mode = {
+            "UV": {"filtering_mode", "uv_wrapping_mode", "transform"},
+            "Triplanar": {
+                "filtering_mode",
+                "shape_crop_mode",
+                "hardness",
+                "transform",
+                "projection_3d",
+            },
+            "Planar": {
+                "filtering_mode",
+                "uv_wrapping_mode",
+                "shape_crop_mode",
+                "backface_culling_angle",
+                "transform",
+                "projection_3d",
+                "depth_culling",
+                "backface_culling",
+            },
+            "Spherical": {
+                "filtering_mode",
+                "uv_wrapping_mode",
+                "shape_crop_mode",
+                "transform",
+                "projection_3d",
+            },
+            "Cylindrical": {
+                "filtering_mode",
+                "uv_wrapping_mode",
+                "shape_crop_mode",
+                "angle",
+                "transform",
+                "projection_3d",
+                "backface_culling",
+            },
+        }
+        unsupported = sorted(set(settings) - supported_by_mode[mode])
+        if unsupported:
+            raise ValueError(
+                f"{mode} projection does not support: {', '.join(unsupported)}"
+            )
+
+        enums = {
+            "filtering_mode": {"BilinearHQ", "BilinearSharp", "Nearest"},
+            "uv_wrapping_mode": {
+                "RepeatNone",
+                "RepeatHorizontally",
+                "RepeatVertically",
+                "Repeat",
+            },
+            "shape_crop_mode": {"CroppedToShape", "ExtendsOutsideShape"},
+        }
+        for key, choices in enums.items():
+            value = settings.get(key)
+            if value is not None and value not in choices:
+                raise ValueError(f"{key} must be one of: {', '.join(sorted(choices))}")
+
+        for key in ("hardness",):
+            value = settings.get(key)
+            if value is not None and (
+                not isinstance(value, (int, float)) or not 0 <= value <= 1
+            ):
+                raise ValueError(f"{key} must be a number in the 0..1 range")
+        angle = settings.get("angle")
+        if angle is not None and not isinstance(angle, (int, float)):
+            raise ValueError("angle must be a number")
+        backface_angle = settings.get("backface_culling_angle")
+        if backface_angle is not None and (
+            not isinstance(backface_angle, (int, float)) or not 45 <= backface_angle <= 135
+        ):
+            raise ValueError("backface_culling_angle must be in the 45..135 range")
+
+        def validate_object(key: str, allowed_fields: set[str]) -> dict[str, Any]:
+            value = settings.get(key) or {}
+            if not isinstance(value, dict):
+                raise ValueError(f"{key} must be an object")
+            extra = sorted(set(value) - allowed_fields)
+            if extra:
+                raise ValueError(f"Unknown {key} settings: {', '.join(extra)}")
+            return value
+
+        transform = validate_object("transform", {"scale", "rotation", "offset"})
+        projection_3d = validate_object(
+            "projection_3d", {"offset", "rotation", "scale"}
+        )
+        for key in ("depth_culling", "backface_culling"):
+            culling = validate_object(key, {"enabled", "hardness"})
+            if "enabled" in culling and not isinstance(culling["enabled"], bool):
+                raise ValueError(f"{key}.enabled must be a boolean")
+            if "hardness" in culling and (
+                not isinstance(culling["hardness"], (int, float))
+                or not 0 <= culling["hardness"] <= 1
+            ):
+                raise ValueError(f"{key}.hardness must be in the 0..1 range")
+
+        def validate_vector(container: dict[str, Any], key: str, length: int) -> None:
+            if key not in container:
+                return
+            value = container[key]
+            if (
+                not isinstance(value, (list, tuple))
+                or len(value) != length
+                or any(not isinstance(component, (int, float)) for component in value)
+            ):
+                raise ValueError(f"{key} must contain exactly {length} numbers")
+
+        for key in ("scale", "offset"):
+            validate_vector(transform, key, 2)
+        if "rotation" in transform and not isinstance(transform["rotation"], (int, float)):
+            raise ValueError("transform.rotation must be a number")
+        for key in ("offset", "rotation", "scale"):
+            validate_vector(projection_3d, key, 3)
+        if "scale" in transform and any(value <= 0 for value in transform["scale"]):
+            raise ValueError("transform.scale components must be greater than zero")
+        if "scale" in projection_3d and any(
+            value <= 0 for value in projection_3d["scale"]
+        ):
+            raise ValueError("projection_3d.scale components must be greater than zero")
+        if mode == "Triplanar" and "offset" in transform:
+            raise ValueError("Triplanar projection does not support transform.offset")
+
     def delete_layer(self, uid: int) -> dict[str, Any]:
         code = '''
 import substance_painter.layerstack as layerstack
@@ -1864,6 +2556,17 @@ result = {"uid": node.uid(), "layer": node.get_name(), "kind": params["kind"]}
             except ValueError:
                 continue
         raise PermissionError(f"Path is outside {env_var}: {output}")
+
+    @classmethod
+    def _validate_mesh_path(cls, mesh_file_path: str) -> Path:
+        mesh = cls._validate_allowed_path(
+            mesh_file_path, "SP_MCP_MESH_ROOTS", "Mesh reload"
+        )
+        if mesh.suffix.casefold() not in {".fbx", ".obj", ".dae", ".ply", ".usd"}:
+            raise ValueError("mesh_file_path must use fbx, obj, dae, ply, or usd")
+        if not mesh.is_file():
+            raise FileNotFoundError(f"Mesh file does not exist: {mesh}")
+        return mesh
 
     @staticmethod
     def _validate_color(color: list[float]) -> None:

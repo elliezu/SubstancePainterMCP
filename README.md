@@ -7,7 +7,7 @@
 
 An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-Version **0.4.0** provides 44 focused MCP tools, Mesh/UDIM geometry masks, dry-run recipe planning with automatic backups, snapshot diffs, Smart Material/Mask application, and transactional UV/Triplanar Fill projection controls. It remains live-validated against **Substance 3D Painter 12.1.1**.
+Version **0.5.0** provides 53 focused MCP tools. It adds resource-backed Fill authoring, advanced 3D projections, cancellable asynchronous baking, and planned asynchronous mesh reloads with Texture Set diffs. It remains live-validated against **Substance 3D Painter 12.1.1**.
 
 > This is an independent community project and is not affiliated with or endorsed by Adobe.
 
@@ -21,6 +21,10 @@ Version **0.4.0** provides 44 focused MCP tools, Mesh/UDIM geometry masks, dry-r
 - Control Mesh or UDIM geometry masks and compare detailed layer snapshots by UID.
 - Insert Fill, Paint, Generator, Filter, Levels, Anchor, and Smart Mask effects into mask stacks.
 - Apply shelf Smart Materials/Masks and configure UV or Triplanar Fill transforms.
+- Assign shelf resources to individual Fill channels or complete materials.
+- Configure Planar, Spherical, and Cylindrical projection transforms and culling.
+- Start, monitor, and cancel asynchronous mesh-map baking.
+- Preflight and monitor mesh reloads while preserving strokes and reporting Texture Set changes.
 - Audit project structure and search layers or resources without mutating the project.
 - Preview exact export paths before writing and restrict exports to explicitly allowed directories.
 - Save verified project copies without changing the current project's location.
@@ -51,6 +55,8 @@ Painter builds may expose newer features while reporting an older API version st
 | `get_capabilities` | Probe channels, blend modes, and version-dependent runtime features. |
 | `audit_project` | Report resolution, channels, layer hygiene, and outdated resources. |
 | `inspect_baking` | Inspect enabled bakers, UV tiles, and mesh-map assignments without baking. |
+| `get_bake_job` | Read progress and terminal status for an asynchronous bake. |
+| `get_mesh_reload_job` | Read completion status and Texture Set changes for a mesh reload. |
 | `list_layers` | Return a recursive UID-based layer tree. |
 | `find_layers` | Search by name, type, or visibility and include parent paths. |
 | `snapshot_layer_tree` | Capture layers, masks, effects, active channels, and a deterministic digest. |
@@ -79,6 +85,9 @@ Painter builds may expose newer features while reporting an older API version st
 | `set_fill_channels` | Set multiple uniform channels, including Roughness, Metallic, and Emission aliases. |
 | `get_fill_projection` | Inspect Fill projection mode and common UV transforms. |
 | `set_fill_projection` | Set Fill, UV, or Triplanar projection and transforms transactionally. |
+| `get_fill_sources` | Inspect material-mode or per-channel Fill sources. |
+| `set_fill_resource` | Assign a `resource://` asset to one channel or a complete Fill material. |
+| `set_fill_projection_advanced` | Configure UV, Triplanar, Planar, Spherical, or Cylindrical projection details. |
 | `set_active_channels` | Replace a Fill or Paint layer's active channel set. |
 | `set_layer_mask` | Add, replace, or remove a White/Black mask. |
 | `insert_mask_effect` | Insert procedural or paint effects into a layer's mask stack. |
@@ -101,6 +110,10 @@ Layer names are not unique in Painter. All mutation tools therefore use the UIDs
 | `export_smart_material` | Export a Group as a verified `.spsm` file. |
 | `export_smart_mask` | Export a layer mask as a verified `.spmsk` file. |
 | `replace_outdated_resources` | Apply Painter's atomic resource replacement after `confirm=true`. |
+| `start_bake` | Start an asynchronous bake after `confirm=true`, optionally creating a project copy first. |
+| `cancel_bake` | Request cooperative cancellation of a running bake job. |
+| `plan_mesh_reload` | Validate an approved mesh path and preview backup/current Texture Set scope. |
+| `start_mesh_reload` | Optionally back up, then asynchronously reload a mesh after `confirm=true`. |
 | `execute_python` | Run arbitrary Painter Python only when explicitly enabled. |
 
 ## Installation
@@ -154,7 +167,8 @@ Example for Claude Desktop on Windows:
       "env": {
         "SP_MCP_TIMEOUT": "120",
         "SP_MCP_EXPORT_ROOTS": "D:\\SubstanceExports",
-        "SP_MCP_PROJECT_ROOTS": "D:\\SubstanceBackups"
+        "SP_MCP_PROJECT_ROOTS": "D:\\SubstanceBackups",
+        "SP_MCP_MESH_ROOTS": "D:\\Meshes"
       }
     }
   }
@@ -173,10 +187,13 @@ Replace the paths with your installation and export directories. You may also us
 | `SP_MCP_ALLOW_EXECUTE_PYTHON` | unset | Set to `1` to expose arbitrary Python execution. |
 | `SP_MCP_EXPORT_ROOTS` | unset | Approved export roots. Separate multiple Windows paths with `;`. |
 | `SP_MCP_PROJECT_ROOTS` | unset | Approved roots for `.spp` project copies. |
+| `SP_MCP_MESH_ROOTS` | unset | Approved input roots for FBX, OBJ, DAE, PLY, and USD mesh reloads. |
 
 Exports are disabled until `SP_MCP_EXPORT_ROOTS` is configured. `plan_texture_export` performs a read-only preflight. `export_textures` repeats the validation and refuses existing targets unless `overwrite=true` is explicitly supplied.
 
 Project copying is independently disabled until `SP_MCP_PROJECT_ROOTS` is configured. `save_project_copy` uses Painter's `save_as_copy`, verifies the resulting file, and confirms that the current project path did not change.
+
+Mesh reload is independently disabled until `SP_MCP_MESH_ROOTS` is configured. `plan_mesh_reload` is read-only; `start_mesh_reload` additionally requires `confirm=true`. A `backup_path` under `SP_MCP_PROJECT_ROOTS` can be supplied to create and verify a project copy before reload. Baking likewise requires `confirm=true` and can take the same optional backup parameters.
 
 ## Safety model
 
@@ -186,6 +203,8 @@ Project copying is independently disabled until `SP_MCP_PROJECT_ROOTS` is config
 - Connection, HTTP, and Painter script failures are reported as distinct error types.
 - Layer mutations use UIDs to avoid editing the wrong layer when names are duplicated.
 - Texture exports require approved roots, a preflight plan, explicit overwrite consent, and post-export file verification.
+- Baking and mesh reload require explicit confirmation, expose persistent job state, and never depend on a long-lived HTTP request.
+- Mesh inputs are restricted to approved roots and Painter-supported extensions.
 - Arbitrary Python is opt-in and disabled by default.
 
 The server is designed for local use. Do not expose Painter's remote-scripting port to untrusted networks.
@@ -216,14 +235,19 @@ With Painter running and a disposable project open, use the live smoke test:
 # v0.4 geometry, recipe backup, projection, and Smart asset application
 .venv\Scripts\python.exe scripts\live_v04.py `
   --output-root D:\SubstanceMCPTest --project-copy
+
+# v0.5 Fill resources/projections plus optional bake and same-mesh reload jobs
+$env:SP_MCP_MESH_ROOTS = "D:\Meshes"
+.venv\Scripts\python.exe scripts\live_v05.py `
+  --mesh D:\Meshes\sample.fbx --run-bake --run-mesh-reload
 ```
 
-The 0.4.0 validation run used Painter 12.1.1 and a saved three-UDIM test project. It verified all 44 FastMCP tool schemas, a mutation-free recipe plan, a verified 951 MB pre-recipe backup, Mesh and UDIM geometry-mask changes, UV and Triplanar transforms, Smart Material application with nested layers, Smart Mask application with its Generator, snapshot diff output, and exact final snapshot restoration. The original project path remained unchanged and all generated layers and test files were removed after verification.
+The 0.5.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 53 FastMCP schemas and 37 automated tests; assigned both a starter procedural Texture and a complete Base Material; round-tripped Planar, Spherical, Cylindrical, and Triplanar settings; cancelled a live bake through Painter's `StopSource`; and reloaded the same 5.57 MB FBX with stroke preservation. The reload completed successfully with no added or removed Texture Sets. Every temporary layer was removed and the tested layer tree returned to its original digest.
 
 ## Roadmap and release notes
 
 - See [docs/RECIPES.md](docs/RECIPES.md) and the [VRChat outfit starter recipe](examples/recipes/vrchat_outfit.json) for transaction examples.
-- See [CHANGELOG.md](CHANGELOG.md) for detailed 0.4.0, 0.3.0, and 0.2.0 release notes.
+- See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 - See [docs/ROADMAP.md](docs/ROADMAP.md) for planned layer recipes, snapshots, backups, engine-specific export profiles, async baking, and Blender round-trip workflows.
 
 ## License

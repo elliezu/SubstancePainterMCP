@@ -52,6 +52,80 @@ def inspect_baking(texture_set: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+def start_bake(
+    texture_set: str,
+    confirm: bool = False,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Start an asynchronous mesh-map bake after explicit confirmation."""
+    return operations.start_bake(
+        texture_set, confirm, backup_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
+def get_bake_job(job_id: str | None = None) -> dict[str, Any]:
+    """Return progress and terminal status for the latest or selected bake job."""
+    return operations.get_bake_job(job_id)
+
+
+@mcp.tool()
+def cancel_bake(job_id: str) -> dict[str, Any]:
+    """Request cooperative cancellation of a running bake job."""
+    return operations.cancel_bake(job_id)
+
+
+@mcp.tool()
+def plan_mesh_reload(
+    mesh_file_path: str,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+    preserve_strokes: bool = True,
+    import_cameras: bool = True,
+) -> dict[str, Any]:
+    """Validate a mesh reload and preview texture-set and backup impact."""
+    return operations.plan_mesh_reload(
+        mesh_file_path,
+        backup_path,
+        backup_mode,
+        overwrite_backup,
+        preserve_strokes,
+        import_cameras,
+    )
+
+
+@mcp.tool()
+def start_mesh_reload(
+    mesh_file_path: str,
+    confirm: bool = False,
+    backup_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+    preserve_strokes: bool = True,
+    import_cameras: bool = True,
+) -> dict[str, Any]:
+    """Back up and asynchronously reload a mesh after explicit confirmation."""
+    return operations.start_mesh_reload(
+        mesh_file_path,
+        confirm,
+        backup_path,
+        backup_mode,
+        overwrite_backup,
+        preserve_strokes,
+        import_cameras,
+    )
+
+
+@mcp.tool()
+def get_mesh_reload_job(job_id: str | None = None) -> dict[str, Any]:
+    """Return status and texture-set changes for the latest mesh reload job."""
+    return operations.get_mesh_reload_job(job_id)
+
+
+@mcp.tool()
 def list_layers(texture_set: str | None = None, recursive: bool = True) -> dict[str, Any]:
     """List layers with stable UIDs, types, visibility, and optional group children."""
     return operations.list_layers(texture_set=texture_set, recursive=recursive)
@@ -180,6 +254,23 @@ def get_fill_projection(uid: int) -> dict[str, Any]:
 
 
 @mcp.tool()
+def get_fill_sources(uid: int) -> dict[str, Any]:
+    """Inspect a Fill layer's material or per-channel color/resource sources."""
+    return operations.get_fill_sources(uid)
+
+
+@mcp.tool()
+def set_fill_resource(
+    uid: int,
+    resource_url: str,
+    channel: str | None = None,
+    material_mode: bool = False,
+) -> dict[str, Any]:
+    """Assign a Painter resource to one Fill channel or to the whole material."""
+    return operations.set_fill_resource(uid, resource_url, channel, material_mode)
+
+
+@mcp.tool()
 def set_fill_projection(
     uid: int,
     mode: str,
@@ -189,6 +280,16 @@ def set_fill_projection(
 ) -> dict[str, Any]:
     """Set Fill, UV, or Triplanar projection with transactional transform updates."""
     return operations.set_fill_projection(uid, mode, scale, rotation, offset)
+
+
+@mcp.tool()
+def set_fill_projection_advanced(
+    uid: int,
+    mode: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Configure UV, triplanar, planar, spherical, or cylindrical projection details."""
+    return operations.set_fill_projection_advanced(uid, mode, settings)
 
 
 @mcp.tool()

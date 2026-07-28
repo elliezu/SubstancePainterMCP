@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0-0.4.0
+### Completed in 0.2.0-0.5.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -35,6 +35,10 @@ These features can be created, verified, and cleaned up in a sample project with
 - Mutation-free recipe planning, optional pre-operation backup, and snapshot diffs.
 - Smart Material and Smart Mask application from validated resource URLs.
 - UV and Triplanar Fill projection transforms with failure rollback.
+- Resource-backed per-channel and material-mode Fill sources.
+- Advanced Planar, Spherical, and Cylindrical projection settings.
+- Persistent asynchronous bake jobs with progress and cancellation.
+- Planned asynchronous mesh reload with approved inputs and Texture Set diffs.
 
 ### Layer structure and recipes
 
@@ -81,8 +85,9 @@ These operations require approved output locations and result verification, but 
 ### Fill sources and projections
 
 - Completed in 0.4.0: inspect projections and set Fill, UV, or Triplanar transforms.
-- Next: connect bitmap/material resources as Fill sources with usage validation.
-- Next: expose advanced Planar, Spherical, and Cylindrical projection parameters.
+- Completed in 0.5.0: inspect and connect channel/material resources.
+- Completed in 0.5.0: advanced Planar, Spherical, and Cylindrical projection parameters.
+- Next: expose procedural Substance parameters and Anchor Point bindings.
 
 ## P3 - Long-running jobs and event bridging
 
@@ -91,8 +96,9 @@ Painter's asynchronous APIs need to be connected to MCP progress and cancellatio
 ### Baking
 
 - Completed read-only inspection of baker enablement, UV tiles, mesh-map assignments, and curvature mode.
-- Validate bake settings before starting.
-- Stream progress from `bake_selected_textures_async`.
+- Completed in 0.5.0: validate enabled Texture Sets/UV tiles before starting.
+- Completed in 0.5.0: persistent progress, terminal status, and cancellation through Painter events.
+- Next: configure individual baker parameters and selected mesh maps.
 - Investigate Painter 12.1 Auto Rebake and Skew Map capabilities.
 - Return structured failures by baker with relevant logs.
 
@@ -100,8 +106,8 @@ Painter's asynchronous APIs need to be connected to MCP progress and cancellatio
 
 - Support Painter 12.0.2+ `AutoUnwrapUVTilesSettings`.
 - Define schemas for USD, glTF, and FBX import options.
-- Diff Texture Sets and layer impact after a mesh reload.
-- Create an automatic backup before destructive topology changes.
+- Completed in 0.5.0: approved-root mesh reload, optional verified backup, status polling, and Texture Set name diffs.
+- Next: diff layer/stack impact and surface per-material remapping details.
 
 ## P4 - Visual QA and human approval
 

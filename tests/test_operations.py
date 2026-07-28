@@ -157,6 +157,62 @@ def test_fill_projection_validates_supported_transforms_locally():
         operations.set_fill_projection(1, "Fill", rotation=10)
 
 
+def test_advanced_projection_validation_is_local():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="Unknown projection settings"):
+        operations.set_fill_projection_advanced(1, "Planar", {"mystery": 1})
+    with pytest.raises(ValueError, match="0..1"):
+        operations.set_fill_projection_advanced(1, "Triplanar", {"hardness": 2})
+    with pytest.raises(ValueError, match="exactly 3"):
+        operations.set_fill_projection_advanced(
+            1, "Spherical", {"projection_3d": {"offset": [0, 1]}}
+        )
+    with pytest.raises(ValueError, match="does not support"):
+        operations.set_fill_projection_advanced(
+            1, "Triplanar", {"transform": {"offset": [0, 0]}}
+        )
+    with pytest.raises(ValueError, match="Spherical projection does not support"):
+        operations.set_fill_projection_advanced(
+            1, "Spherical", {"backface_culling": {"enabled": True}}
+        )
+    assert operations.remote.calls == []
+
+
+def test_fill_resource_requires_channel_or_material_mode():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="resource://"):
+        operations.set_fill_resource(1, "https://example.com/a.png", "BaseColor")
+    with pytest.raises(ValueError, match="channel is required"):
+        operations.set_fill_resource(1, "resource://project/a")
+    with pytest.raises(ValueError, match="must be omitted"):
+        operations.set_fill_resource(
+            1, "resource://project/a", "BaseColor", material_mode=True
+        )
+
+
+def test_async_mutations_require_confirmation():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.start_bake("Body")
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.start_mesh_reload("C:/mesh.fbx")
+    assert operations.remote.calls == []
+
+
+def test_mesh_reload_requires_approved_existing_mesh(monkeypatch, tmp_path):
+    operations = PainterOperations(FakeRemote())
+    monkeypatch.delenv("SP_MCP_MESH_ROOTS", raising=False)
+    with pytest.raises(PermissionError, match="disabled"):
+        operations.plan_mesh_reload(str(tmp_path / "mesh.fbx"))
+    monkeypatch.setenv("SP_MCP_MESH_ROOTS", str(tmp_path))
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        operations.plan_mesh_reload(str(tmp_path / "mesh.fbx"))
+    unsupported = tmp_path / "mesh.blend"
+    unsupported.write_bytes(b"test")
+    with pytest.raises(ValueError, match="fbx"):
+        operations.plan_mesh_reload(str(unsupported))
+
+
 def test_smart_material_requires_resource_url():
     with pytest.raises(ValueError, match="resource://"):
         PainterOperations(FakeRemote()).insert_smart_material("https://example.com/material")
