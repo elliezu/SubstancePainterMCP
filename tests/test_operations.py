@@ -290,6 +290,141 @@ def test_mesh_reload_requires_approved_existing_mesh(monkeypatch, tmp_path):
         operations.plan_mesh_reload(str(unsupported))
 
 
+def test_auto_unwrap_and_mesh_settings_validation_is_local():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(ValueError, match="power-of-two"):
+        operations._normalize_auto_unwrap_settings({
+            "uv_tiles": {
+                "mode": "texel_density",
+                "texel_density": 10,
+                "reference_resolution": 1000,
+            }
+        })
+    with pytest.raises(ValueError, match="scope_name"):
+        operations._normalize_mesh_settings(
+            {"type": "usd", "scope_name": "relative"}, allow_gltf=True
+        )
+    with pytest.raises(ValueError, match="type must be usd"):
+        operations._normalize_mesh_settings(
+            {"type": "gltf", "invert_normal_maps": True}, allow_gltf=False
+        )
+
+
+def test_mesh_reload_plan_normalizes_auto_unwrap(monkeypatch, tmp_path):
+    mesh = tmp_path / "mesh.fbx"
+    mesh.write_bytes(b"mesh")
+    monkeypatch.setenv("SP_MCP_MESH_ROOTS", str(tmp_path))
+    response = {
+        "success": True,
+        "data": {"busy": False, "current_mesh": "old.fbx", "texture_sets": []},
+    }
+    result = PainterOperations(FakeRemote(response)).plan_mesh_reload(
+        str(mesh),
+        auto_unwrap_settings={
+            "recompute_seams": False,
+            "uv_tiles": {"mode": "count", "max_count": 8},
+        },
+    )
+    assert result["auto_unwrap_settings"]["recompute_seams"] is False
+    assert result["auto_unwrap_settings"]["uv_tiles"] == {
+        "mode": "count",
+        "max_count": 8,
+    }
+
+
+def test_project_creation_plan_validates_and_normalizes(monkeypatch, tmp_path):
+    mesh = tmp_path / "mesh.fbx"
+    mesh.write_bytes(b"mesh")
+    monkeypatch.setenv("SP_MCP_MESH_ROOTS", str(tmp_path))
+    monkeypatch.setenv("SP_MCP_PROJECT_ROOTS", str(tmp_path))
+    monkeypatch.setenv("SP_MCP_RESOURCE_ROOTS", str(tmp_path))
+    response = {
+        "success": True,
+        "data": {"open": False, "path": None, "needs_saving": False, "busy": False},
+    }
+    result = PainterOperations(FakeRemote(response)).plan_project_creation(
+        str(mesh),
+        str(tmp_path / "new.spp"),
+        settings={
+            "normal_map_format": "OpenGL",
+            "default_texture_resolution": 1024,
+            "auto_unwrap_settings": {
+                "uv_tiles": {
+                    "mode": "texel_density",
+                    "texel_density": 20,
+                    "reference_resolution": 2048,
+                }
+            },
+        },
+    )
+    assert result["ready"] is True
+    assert result["settings"]["normal_map_format"] == "OpenGL"
+    assert result["settings"]["auto_unwrap_settings"]["uv_tiles"]["mode"] == "texel_density"
+
+
+def test_project_creation_plan_requires_backup_for_open_project(monkeypatch, tmp_path):
+    mesh = tmp_path / "mesh.fbx"
+    mesh.write_bytes(b"mesh")
+    monkeypatch.setenv("SP_MCP_MESH_ROOTS", str(tmp_path))
+    monkeypatch.setenv("SP_MCP_PROJECT_ROOTS", str(tmp_path))
+    response = {
+        "success": True,
+        "data": {"open": True, "path": "old.spp", "needs_saving": True, "busy": False},
+    }
+    result = PainterOperations(FakeRemote(response)).plan_project_creation(
+        str(mesh), str(tmp_path / "new.spp"), replace_current=True
+    )
+    assert result["ready"] is False
+    assert result["errors"][0]["code"] == "backup_required"
+
+
+def test_project_creation_plan_rejects_recovery_path_collisions(monkeypatch, tmp_path):
+    mesh = tmp_path / "mesh.fbx"
+    mesh.write_bytes(b"mesh")
+    current = tmp_path / "current.spp"
+    current.write_bytes(b"project")
+    monkeypatch.setenv("SP_MCP_MESH_ROOTS", str(tmp_path))
+    monkeypatch.setenv("SP_MCP_PROJECT_ROOTS", str(tmp_path))
+    response = {
+        "success": True,
+        "data": {
+            "open": True,
+            "path": str(current),
+            "needs_saving": False,
+            "busy": False,
+        },
+    }
+    operations = PainterOperations(FakeRemote(response))
+    same_output = operations.plan_project_creation(
+        str(mesh),
+        str(current),
+        overwrite=True,
+        replace_current=True,
+        backup_current_path=str(tmp_path / "backup.spp"),
+    )
+    assert "output_is_current_project" in {
+        item["code"] for item in same_output["errors"]
+    }
+    collision = operations.plan_project_creation(
+        str(mesh),
+        str(tmp_path / "new.spp"),
+        replace_current=True,
+        backup_current_path=str(tmp_path / "new.spp"),
+    )
+    assert "output_backup_collision" in {item["code"] for item in collision["errors"]}
+
+
+def test_project_context_mutations_require_confirmation():
+    operations = PainterOperations(FakeRemote())
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.create_project("mesh.fbx", "new.spp")
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.open_project("project.spp")
+    with pytest.raises(PermissionError, match="confirm=true"):
+        operations.save_project()
+    assert operations.remote.calls == []
+
+
 def test_fill_parameter_values_are_validated_locally():
     operations = PainterOperations(FakeRemote())
     with pytest.raises(ValueError, match="non-empty"):

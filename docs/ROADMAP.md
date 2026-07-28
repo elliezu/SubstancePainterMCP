@@ -15,7 +15,7 @@ Painter 12.1.1 is the current validation baseline. Features should be enabled fr
 
 These features can be created, verified, and cleaned up in a sample project without subjective visual review.
 
-### Completed in 0.2.0-0.8.0
+### Completed in 0.2.0-0.9.0
 
 - Fill, Paint, and Group creation plus UID-based rename, visibility, opacity, blending, selection, and deletion.
 - Multiple uniform Fill channels with OpenPBR alias normalization.
@@ -46,6 +46,8 @@ These features can be created, verified, and cleaned up in a sample project with
 - Multi-Texture-Set bake preflight, batch jobs, state restoration, and result manifests.
 - Sandboxed project/session resource ingestion with exact ResourceID verification.
 - Procedural image-input wiring and Resource-typed baking inputs.
+- Planned, backed-up asynchronous project creation and safe project switching.
+- Typed Auto UV, USD, and glTF project/mesh-reload settings.
 
 ### Layer structure and recipes
 
@@ -80,7 +82,7 @@ These operations require approved output locations and result verification, but 
 ### Project saving and backups
 
 - Completed: `save_project_copy(path)` with an independent approved-root sandbox.
-- Allow overwriting the current project through `save_project` only after an explicit request.
+- Completed in 0.9.0: overwrite and verify the current project through `save_project` only after explicit confirmation.
 - Completed in 0.4.0: optional backup before applying a layer recipe.
 
 ### Smart Materials and Smart Masks
@@ -116,8 +118,10 @@ Painter's asynchronous APIs need to be connected to MCP progress and cancellatio
 
 ### Project creation and mesh reload
 
-- Support Painter 12.0.2+ `AutoUnwrapUVTilesSettings`.
-- Define schemas for USD, glTF, and FBX import options.
+- Completed in 0.9.0: project creation planning, verified current-context backup, event-driven create/save jobs, output verification, and failure recovery.
+- Completed in 0.9.0: Painter `AutoUnwrapUVTilesSettings` count/texel-density schemas for project creation and mesh reload.
+- Completed in 0.9.0: USD settings for creation/reload and glTF settings for project creation. FBX exposes no format-specific public settings object in Painter 12.1.1.
+- Completed in 0.9.0: safe `.spp` context switching and explicit current-project saving.
 - Completed in 0.5.0: approved-root mesh reload, optional verified backup, status polling, and Texture Set name diffs.
 - Next: diff layer/stack impact and surface per-material remapping details.
 

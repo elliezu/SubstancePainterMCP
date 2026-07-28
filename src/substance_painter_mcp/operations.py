@@ -121,6 +121,448 @@ else:
 '''
         return _unwrap(self.remote.execute_python_json(code))
 
+    def plan_project_creation(
+        self,
+        mesh_file_path: str,
+        output_path: str,
+        mesh_map_file_paths: list[str] | None = None,
+        template_file_path: str | None = None,
+        settings: dict[str, Any] | None = None,
+        overwrite: bool = False,
+        replace_current: bool = False,
+        backup_current_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+    ) -> dict[str, Any]:
+        mesh = self._validate_project_mesh_path(mesh_file_path)
+        output = self._validate_allowed_path(
+            output_path, "SP_MCP_PROJECT_ROOTS", "New project output"
+        )
+        if output.suffix.casefold() != ".spp":
+            raise ValueError("output_path must use the .spp extension")
+        if not output.parent.is_dir():
+            raise FileNotFoundError(f"Project output directory does not exist: {output.parent}")
+        if output.exists() and not overwrite:
+            raise FileExistsError(
+                f"Project output already exists; set overwrite=true: {output}"
+            )
+        maps = mesh_map_file_paths or []
+        if (
+            not isinstance(maps, list)
+            or any(not isinstance(path, str) for path in maps)
+            or len(set(maps)) != len(maps)
+        ):
+            raise ValueError("mesh_map_file_paths must contain unique path strings")
+        map_extensions = {
+            ".bmp", ".exr", ".hdr", ".jpeg", ".jpg", ".png", ".psd",
+            ".tga", ".tif", ".tiff",
+        }
+        resolved_maps = [
+            self._validate_project_aux_path(path, map_extensions, "Mesh map input")
+            for path in maps
+        ]
+        template = None
+        if template_file_path:
+            template = self._validate_project_aux_path(
+                template_file_path, {".spt"}, "Project template"
+            )
+        normalized_settings = self._normalize_project_settings(settings)
+        backup = None
+        if backup_current_path:
+            backup_file = self._validate_allowed_path(
+                backup_current_path, "SP_MCP_PROJECT_ROOTS", "Current project backup"
+            )
+            if backup_file.suffix.casefold() != ".spp":
+                raise ValueError("backup_current_path must use the .spp extension")
+            if backup_file.exists() and not overwrite_backup:
+                raise FileExistsError(
+                    f"Current project backup already exists; set overwrite_backup=true: {backup_file}"
+                )
+            if backup_mode not in {"Incremental", "Full"}:
+                raise ValueError("backup_mode must be Incremental or Full")
+            backup = {
+                "path": str(backup_file),
+                "mode": backup_mode,
+                "overwrite": overwrite_backup,
+            }
+        code = '''
+import substance_painter.project as project
+result = {
+    "open": project.is_open(),
+    "path": str(project.file_path()) if project.is_open() and project.file_path() else None,
+    "needs_saving": project.needs_saving() if project.is_open() else False,
+    "busy": project.is_busy(),
+}
+'''
+        current = _unwrap(self.remote.execute_python_json(code))
+        errors = []
+        output_key = os.path.normcase(str(output))
+        backup_key = os.path.normcase(backup["path"]) if backup else None
+        current_key = (
+            os.path.normcase(str(Path(current["path"]).expanduser().resolve()))
+            if current.get("path") else None
+        )
+        if backup_key == output_key:
+            errors.append({
+                "code": "output_backup_collision",
+                "message": "output_path and backup_current_path must be different files.",
+            })
+        if current_key == output_key:
+            errors.append({
+                "code": "output_is_current_project",
+                "message": "A new project cannot overwrite the currently open project path.",
+            })
+        if backup_key is not None and current_key == backup_key:
+            errors.append({
+                "code": "backup_is_current_project",
+                "message": "backup_current_path must not be the current project path.",
+            })
+        if current["busy"]:
+            errors.append({"code": "painter_busy", "message": "Painter is busy."})
+        if current["open"] and not replace_current:
+            errors.append({
+                "code": "project_open",
+                "message": "A project is open; set replace_current=true and provide a backup.",
+            })
+        if current["open"] and replace_current and backup is None:
+            errors.append({
+                "code": "backup_required",
+                "message": "Replacing an open project requires backup_current_path.",
+            })
+        return {
+            "ready": not errors,
+            "errors": errors,
+            "mesh_file_path": mesh.as_posix(),
+            "mesh_map_file_paths": [path.as_posix() for path in resolved_maps],
+            "template_file_path": template.as_posix() if template else None,
+            "output_path": str(output),
+            "overwrite": overwrite,
+            "replace_current": replace_current,
+            "backup": backup,
+            "settings": normalized_settings,
+            "current": current,
+            "requires_confirmation": True,
+        }
+
+    def create_project(
+        self,
+        mesh_file_path: str,
+        output_path: str,
+        mesh_map_file_paths: list[str] | None = None,
+        template_file_path: str | None = None,
+        settings: dict[str, Any] | None = None,
+        overwrite: bool = False,
+        replace_current: bool = False,
+        backup_current_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError("Project creation replaces application context; set confirm=true")
+        plan = self.plan_project_creation(
+            mesh_file_path,
+            output_path,
+            mesh_map_file_paths,
+            template_file_path,
+            settings,
+            overwrite,
+            replace_current,
+            backup_current_path,
+            backup_mode,
+            overwrite_backup,
+        )
+        if not plan["ready"]:
+            raise ValueError(f"Project creation preflight failed: {plan['errors']}")
+        backup = None
+        if plan["current"]["open"]:
+            backup = self.save_project_copy(
+                backup_current_path, backup_mode, overwrite_backup
+            )
+        code = '''
+import builtins
+import time
+import uuid
+import substance_painter.event as event
+import substance_painter.project as project
+import substance_painter.textureset as textureset
+
+def auto_unwrap(config):
+    if config is None:
+        return None
+    tiles = config["uv_tiles"]
+    if tiles["mode"] == "count":
+        tile_settings = project.AutoUnwrapUVTilesSettingsUVTilesCount(tiles["max_count"])
+    else:
+        tile_settings = project.AutoUnwrapUVTilesSettingsTexelDensity(
+            tiles["texel_density"], tiles["reference_resolution"]
+        )
+    return project.AutoUnwrapSettings(
+        recompute_seams=config["recompute_seams"],
+        recompute_uv_islands=config["recompute_uv_islands"],
+        recompute_packing=config["recompute_packing"],
+        margin_size=config["margin_size"],
+        island_orientation=project.AutoUnwrapUVIslandOrientation.__members__[
+            config["island_orientation"]
+        ],
+        uv_tiles_settings=tile_settings,
+        avoid_elongated_uv_islands=config["avoid_elongated_uv_islands"],
+        create_fewer_seams=config["create_fewer_seams"],
+    )
+
+def mesh_settings(config):
+    if config is None:
+        return None
+    if config["type"] == "usd":
+        return project.UsdSettings(
+            scope_name=config["scope_name"],
+            variants=config.get("variants"),
+            subdivision_level=config["subdivision_level"],
+            frame=config["frame"],
+        )
+    return project.GltfSettings(invert_normal_maps=config.get("invert_normal_maps"))
+
+config = params["settings"]
+settings = project.Settings(
+    normal_map_format=(project.NormalMapFormat.__members__[config["normal_map_format"]]
+                       if config.get("normal_map_format") else None),
+    tangent_space_mode=(project.TangentSpace.__members__[config["tangent_space_mode"]]
+                        if config.get("tangent_space_mode") else None),
+    project_workflow=(project.ProjectWorkflow.__members__[config["project_workflow"]]
+                      if config.get("project_workflow") else None),
+    default_texture_resolution=config.get("default_texture_resolution"),
+    import_cameras=config.get("import_cameras"),
+    mesh_unit_scale=config.get("mesh_unit_scale"),
+    mesh_settings=mesh_settings(config.get("mesh_settings")),
+    auto_unwrap_settings=auto_unwrap(config.get("auto_unwrap_settings")),
+)
+original_path = str(project.file_path()) if project.is_open() and project.file_path() else None
+job_id = uuid.uuid4().hex
+state = {
+    "job_id": job_id,
+    "operation": "project_creation",
+    "status": "starting",
+    "output_path": params["output_path"],
+    "mesh_file_path": params["mesh_file_path"],
+    "started_at": time.time(),
+    "finished_at": None,
+    "texture_sets": None,
+    "error": None,
+    "recovered_project": None,
+}
+builtins._sp_mcp_project_creation_state = state
+
+def disconnect():
+    callback = getattr(builtins, "_sp_mcp_project_creation_callback", None)
+    if callback:
+        try:
+            event.DISPATCHER.disconnect(event.ProjectEditionEntered, callback)
+        except Exception:
+            pass
+
+def recover():
+    recovery = params.get("recovery_path") or original_path
+    try:
+        if project.is_open():
+            project.close()
+        if recovery:
+            project.open(recovery)
+            state["recovered_project"] = recovery
+    except Exception as recovery_error:
+        state["error"] += f"; recovery failed: {type(recovery_error).__name__}: {recovery_error}"
+
+def on_entered(_message):
+    if getattr(builtins, "_sp_mcp_project_creation_state", None) is not state:
+        return
+    disconnect()
+    try:
+        project.save_as(params["output_path"], project.ProjectSaveMode.Full)
+        state["texture_sets"] = [
+            item.name() if callable(item.name) else item.name
+            for item in textureset.all_texture_sets()
+        ]
+        state["status"] = "success"
+    except Exception as exc:
+        state["status"] = "failed"
+        state["error"] = f"{type(exc).__name__}: {exc}"
+        recover()
+    state["finished_at"] = time.time()
+
+builtins._sp_mcp_project_creation_callback = on_entered
+event.DISPATCHER.connect_strong(event.ProjectEditionEntered, on_entered)
+try:
+    if project.is_open():
+        project.close()
+    project.create(
+        params["mesh_file_path"],
+        params["mesh_map_file_paths"],
+        params.get("template_file_path"),
+        settings,
+    )
+    if state["status"] == "starting":
+        state["status"] = "running"
+except Exception as exc:
+    disconnect()
+    state["status"] = "failed"
+    state["error"] = f"{type(exc).__name__}: {exc}"
+    state["finished_at"] = time.time()
+    recover()
+    raise
+result = dict(state)
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "mesh_file_path": plan["mesh_file_path"],
+                    "mesh_map_file_paths": plan["mesh_map_file_paths"],
+                    "template_file_path": plan["template_file_path"],
+                    "output_path": Path(plan["output_path"]).as_posix(),
+                    "settings": plan["settings"],
+                    "recovery_path": (
+                        Path(backup_current_path).expanduser().resolve().as_posix()
+                        if backup_current_path else None
+                    ),
+                },
+            )
+        )
+        result.update({
+            "backup": backup,
+            "plan": plan,
+        })
+        return result
+
+    def get_project_creation_job(self, job_id: str | None = None) -> dict[str, Any]:
+        code = '''
+import builtins
+import substance_painter.project as project
+state = getattr(builtins, "_sp_mcp_project_creation_state", None)
+if state is None:
+    result = {"found": False, "job": None, "busy": project.is_busy()}
+elif params.get("job_id") and state["job_id"] != params["job_id"]:
+    result = {"found": False, "job": None, "busy": project.is_busy()}
+else:
+    result = {"found": True, "job": dict(state), "busy": project.is_busy()}
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(code, {"job_id": job_id})
+        )
+        if result.get("found") and result["job"]["status"] == "success":
+            output = Path(result["job"]["output_path"])
+            result["verification"] = {
+                "exists": output.is_file(),
+                "bytes": output.stat().st_size if output.is_file() else None,
+                "verified": output.is_file() and output.stat().st_size > 0,
+            }
+        else:
+            result["verification"] = None
+        return result
+
+    def save_project(self, mode: str = "Incremental", confirm: bool = False) -> dict[str, Any]:
+        if mode not in {"Incremental", "Full"}:
+            raise ValueError("mode must be Incremental or Full")
+        if not confirm:
+            raise PermissionError("Saving overwrites the current project; set confirm=true")
+        code = '''
+import substance_painter.project as project
+if not project.is_open() or not project.file_path():
+    raise RuntimeError("No saved project is open")
+if project.is_busy():
+    raise RuntimeError("Painter is busy")
+path = str(project.file_path())
+before = project.needs_saving()
+project.save(project.ProjectSaveMode.__members__[params["mode"]])
+result = {"path": path, "needed_saving": before, "needs_saving": project.needs_saving()}
+'''
+        result = _unwrap(self.remote.execute_python_json(code, {"mode": mode}))
+        path = Path(result["path"])
+        result.update({
+            "exists": path.is_file(),
+            "bytes": path.stat().st_size if path.is_file() else None,
+        })
+        if not result["exists"] or not result["bytes"] or result["needs_saving"]:
+            raise IOError(f"Current project save could not be verified: {path}")
+        return result
+
+    def open_project(
+        self,
+        project_path: str,
+        confirm: bool = False,
+        backup_current_path: str | None = None,
+        backup_mode: str = "Incremental",
+        overwrite_backup: bool = False,
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise PermissionError("Opening a project replaces application context; set confirm=true")
+        target = self._validate_allowed_path(
+            project_path, "SP_MCP_PROJECT_ROOTS", "Project open"
+        )
+        if target.suffix.casefold() != ".spp" or not target.is_file():
+            raise FileNotFoundError(f"Project path must be an existing .spp file: {target}")
+        if backup_current_path and os.path.normcase(str(target)) == os.path.normcase(
+            str(Path(backup_current_path).expanduser().resolve())
+        ):
+            raise ValueError("backup_current_path must differ from the project being opened")
+        state_code = '''
+import substance_painter.project as project
+result = {
+    "open": project.is_open(),
+    "path": str(project.file_path()) if project.is_open() and project.file_path() else None,
+    "needs_saving": project.needs_saving() if project.is_open() else False,
+    "busy": project.is_busy(),
+}
+'''
+        current = _unwrap(self.remote.execute_python_json(state_code))
+        if current["busy"]:
+            raise RuntimeError("Painter is busy")
+        backup = None
+        if current["open"] and current["needs_saving"]:
+            if not backup_current_path:
+                raise ValueError("The current project has unsaved changes; backup_current_path is required")
+            backup = self.save_project_copy(
+                backup_current_path, backup_mode, overwrite_backup
+            )
+        code = '''
+import substance_painter.project as project
+import substance_painter.textureset as textureset
+original = str(project.file_path()) if project.is_open() and project.file_path() else None
+if project.is_open():
+    project.close()
+try:
+    project.open(params["project_path"])
+except Exception:
+    if original:
+        try:
+            project.open(params.get("recovery_path") or original)
+        except Exception:
+            pass
+    raise
+result = {
+    "open": project.is_open(),
+    "path": str(project.file_path()) if project.file_path() else None,
+    "mesh_file_path": project.last_imported_mesh_path(),
+    "texture_sets": [
+        item.name() if callable(item.name) else item.name
+        for item in textureset.all_texture_sets()
+    ],
+    "needs_saving": project.needs_saving(),
+}
+'''
+        result = _unwrap(
+            self.remote.execute_python_json(
+                code,
+                {
+                    "project_path": target.as_posix(),
+                    "recovery_path": (
+                        Path(backup_current_path).expanduser().resolve().as_posix()
+                        if backup_current_path else None
+                    ),
+                },
+            )
+        )
+        result["backup"] = backup
+        return result
+
     def capabilities(self) -> dict[str, Any]:
         code = '''
 import substance_painter.baking as baking
@@ -164,6 +606,10 @@ result = {
         "baking_resource_inputs": hasattr(baking.BakingParameters, "set"),
         "auto_rebake_control": hasattr(baking, "set_auto_rebake"),
         "skew_painting_control": hasattr(baking, "start_skew_painting"),
+        "project_creation": hasattr(project, "create"),
+        "project_open": hasattr(project, "open"),
+        "current_project_save": hasattr(project, "save"),
+        "typed_mesh_import_settings": hasattr(project, "AutoUnwrapSettings"),
     },
 }
 '''
@@ -1272,8 +1718,12 @@ result = {"requested": requested, "job": dict(state)}
         overwrite_backup: bool = False,
         preserve_strokes: bool = True,
         import_cameras: bool = True,
+        auto_unwrap_settings: dict[str, Any] | None = None,
+        mesh_settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         mesh = self._validate_mesh_path(mesh_file_path)
+        normalized_unwrap = self._normalize_auto_unwrap_settings(auto_unwrap_settings)
+        normalized_mesh = self._normalize_mesh_settings(mesh_settings, allow_gltf=False)
         backup = None
         if backup_path:
             backup_file = self._validate_allowed_path(
@@ -1318,6 +1768,8 @@ result = {
             "bytes": mesh.stat().st_size,
             "preserve_strokes": preserve_strokes,
             "import_cameras": import_cameras,
+            "auto_unwrap_settings": normalized_unwrap,
+            "mesh_settings": normalized_mesh,
             "backup": backup,
             "current": current,
             "requires_confirmation": True,
@@ -1332,6 +1784,8 @@ result = {
         overwrite_backup: bool = False,
         preserve_strokes: bool = True,
         import_cameras: bool = True,
+        auto_unwrap_settings: dict[str, Any] | None = None,
+        mesh_settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not confirm:
             raise PermissionError("Mesh reload modifies the project; set confirm=true to start")
@@ -1342,6 +1796,8 @@ result = {
             overwrite_backup,
             preserve_strokes,
             import_cameras,
+            auto_unwrap_settings,
+            mesh_settings,
         )
         backup = (
             self.save_project_copy(backup_path, backup_mode, overwrite_backup)
@@ -1370,6 +1826,8 @@ state = {
     "previous_mesh": project.last_imported_mesh_path(),
     "preserve_strokes": params["preserve_strokes"],
     "import_cameras": params["import_cameras"],
+    "auto_unwrap_settings": params.get("auto_unwrap_settings"),
+    "mesh_settings": params.get("mesh_settings"),
     "started_at": time.time(),
     "finished_at": None,
     "texture_sets_before": before_sets,
@@ -1397,9 +1855,45 @@ def on_loaded(status):
         state["error"] = f"Painter mesh reload status: {status.name}"
 
 builtins._sp_mcp_mesh_reload_callback = on_loaded
+
+def auto_unwrap(config):
+    if config is None:
+        return None
+    tiles = config["uv_tiles"]
+    if tiles["mode"] == "count":
+        tile_settings = project.AutoUnwrapUVTilesSettingsUVTilesCount(tiles["max_count"])
+    else:
+        tile_settings = project.AutoUnwrapUVTilesSettingsTexelDensity(
+            tiles["texel_density"], tiles["reference_resolution"]
+        )
+    return project.AutoUnwrapSettings(
+        recompute_seams=config["recompute_seams"],
+        recompute_uv_islands=config["recompute_uv_islands"],
+        recompute_packing=config["recompute_packing"],
+        margin_size=config["margin_size"],
+        island_orientation=project.AutoUnwrapUVIslandOrientation.__members__[
+            config["island_orientation"]
+        ],
+        uv_tiles_settings=tile_settings,
+        avoid_elongated_uv_islands=config["avoid_elongated_uv_islands"],
+        create_fewer_seams=config["create_fewer_seams"],
+    )
+
+def usd_settings(config):
+    if config is None:
+        return None
+    return project.UsdSettings(
+        scope_name=config["scope_name"],
+        variants=config.get("variants"),
+        subdivision_level=config["subdivision_level"],
+        frame=config["frame"],
+    )
+
 settings = project.MeshReloadingSettings(
     import_cameras=params["import_cameras"],
     preserve_strokes=params["preserve_strokes"],
+    mesh_settings=usd_settings(params.get("mesh_settings")),
+    auto_unwrap_settings=auto_unwrap(params.get("auto_unwrap_settings")),
 )
 try:
     project.reload_mesh(params["mesh_file_path"], settings, on_loaded)
@@ -1417,6 +1911,8 @@ result = dict(state)
                     "mesh_file_path": Path(mesh_file_path).expanduser().resolve().as_posix(),
                     "preserve_strokes": preserve_strokes,
                     "import_cameras": import_cameras,
+                    "auto_unwrap_settings": plan["auto_unwrap_settings"],
+                    "mesh_settings": plan["mesh_settings"],
                 },
             )
         )
@@ -4118,6 +4614,33 @@ result = {"uid": node.uid(), "layer": node.get_name(), "kind": params["kind"]}
         return mesh
 
     @classmethod
+    def _validate_project_mesh_path(cls, mesh_file_path: str) -> Path:
+        mesh = cls._validate_allowed_path(
+            mesh_file_path, "SP_MCP_MESH_ROOTS", "Project mesh input"
+        )
+        if mesh.suffix.casefold() not in {
+            ".fbx", ".obj", ".dae", ".ply", ".usd", ".usda", ".usdc", ".usdz",
+            ".gltf", ".glb",
+        }:
+            raise ValueError("Project mesh must use FBX, OBJ, DAE, PLY, USD, glTF, or GLB")
+        if not mesh.is_file():
+            raise FileNotFoundError(f"Project mesh does not exist: {mesh}")
+        return mesh
+
+    @classmethod
+    def _validate_project_aux_path(
+        cls, file_path: str, extensions: set[str], label: str
+    ) -> Path:
+        item = cls._validate_allowed_path(
+            file_path, "SP_MCP_RESOURCE_ROOTS", label
+        )
+        if item.suffix.casefold() not in extensions:
+            raise ValueError(f"{label} uses an unsupported extension: {item.suffix}")
+        if not item.is_file():
+            raise FileNotFoundError(f"{label} does not exist: {item}")
+        return item
+
+    @classmethod
     def _validate_bake_mesh_path(cls, mesh_file_path: str) -> Path:
         mesh = cls._validate_allowed_path(
             mesh_file_path, "SP_MCP_BAKE_MESH_ROOTS", "Baking mesh input"
@@ -4146,6 +4669,187 @@ result = {"uid": node.uid(), "layer": node.get_name(), "kind": params["kind"]}
         if not resource_path.is_file():
             raise FileNotFoundError(f"Resource file does not exist: {resource_path}")
         return resource_path
+
+    @staticmethod
+    def _normalize_auto_unwrap_settings(value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("auto_unwrap_settings must be an object or null")
+        allowed = {
+            "recompute_seams", "recompute_uv_islands", "recompute_packing",
+            "margin_size", "island_orientation", "uv_tiles",
+            "avoid_elongated_uv_islands", "create_fewer_seams",
+        }
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            raise ValueError(f"Unknown auto unwrap settings: {unknown}")
+        result = {
+            "recompute_seams": value.get("recompute_seams", True),
+            "recompute_uv_islands": value.get("recompute_uv_islands", True),
+            "recompute_packing": value.get("recompute_packing", True),
+            "margin_size": value.get("margin_size", 2.0),
+            "island_orientation": value.get("island_orientation", "RotateFreely"),
+            "avoid_elongated_uv_islands": value.get("avoid_elongated_uv_islands", False),
+            "create_fewer_seams": value.get("create_fewer_seams", True),
+        }
+        for name in (
+            "recompute_seams", "recompute_uv_islands", "recompute_packing",
+            "avoid_elongated_uv_islands", "create_fewer_seams",
+        ):
+            if not isinstance(result[name], bool):
+                raise ValueError(f"{name} must be a boolean")
+        if (
+            not isinstance(result["margin_size"], (int, float))
+            or isinstance(result["margin_size"], bool)
+            or not 0 <= result["margin_size"] <= 20
+        ):
+            raise ValueError("margin_size must be in the 0..20 range")
+        orientations = {"RotateFreely", "AlignWith3DMesh", "KeepOriginal"}
+        if result["island_orientation"] not in orientations:
+            raise ValueError(
+                f"island_orientation must be one of: {', '.join(sorted(orientations))}"
+            )
+        uv_tiles = value.get("uv_tiles", {"mode": "count", "max_count": 4})
+        if not isinstance(uv_tiles, dict):
+            raise ValueError("uv_tiles must be an object")
+        mode = uv_tiles.get("mode", "count")
+        if mode == "count":
+            unknown_uv = sorted(set(uv_tiles) - {"mode", "max_count"})
+            maximum = uv_tiles.get("max_count", 4)
+            if unknown_uv or not isinstance(maximum, int) or isinstance(maximum, bool) or not 1 <= maximum <= 1024:
+                raise ValueError("count-based uv_tiles require max_count in the 1..1024 range")
+            result["uv_tiles"] = {"mode": "count", "max_count": maximum}
+        elif mode == "texel_density":
+            unknown_uv = sorted(
+                set(uv_tiles) - {"mode", "texel_density", "reference_resolution"}
+            )
+            density = uv_tiles.get("texel_density", 1.0)
+            resolution = uv_tiles.get("reference_resolution", 1024)
+            valid_resolution = (
+                isinstance(resolution, int)
+                and not isinstance(resolution, bool)
+                and 128 <= resolution <= 4096
+                and resolution & (resolution - 1) == 0
+            )
+            if (
+                unknown_uv
+                or not isinstance(density, (int, float))
+                or isinstance(density, bool)
+                or not 0.01 <= density <= 1_000_000
+                or not valid_resolution
+            ):
+                raise ValueError(
+                    "texel-density uv_tiles require density 0.01..1000000 and a power-of-two reference_resolution 128..4096"
+                )
+            result["uv_tiles"] = {
+                "mode": "texel_density",
+                "texel_density": float(density),
+                "reference_resolution": resolution,
+            }
+        else:
+            raise ValueError("uv_tiles mode must be count or texel_density")
+        result["margin_size"] = float(result["margin_size"])
+        return result
+
+    @staticmethod
+    def _normalize_mesh_settings(
+        value: dict[str, Any] | None, *, allow_gltf: bool
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("mesh_settings must be an object or null")
+        kind = str(value.get("type", "")).casefold()
+        if kind == "usd":
+            unknown = sorted(
+                set(value) - {"type", "scope_name", "variants", "subdivision_level", "frame"}
+            )
+            if unknown:
+                raise ValueError(f"Unknown USD settings: {unknown}")
+            scope = value.get("scope_name", "/")
+            subdivision = value.get("subdivision_level", 1)
+            frame = value.get("frame", 0)
+            if not isinstance(scope, str) or not scope.startswith("/"):
+                raise ValueError("USD scope_name must be an absolute prim path starting with /")
+            if not isinstance(subdivision, int) or isinstance(subdivision, bool) or subdivision < 0:
+                raise ValueError("USD subdivision_level must be a non-negative integer")
+            if not isinstance(frame, int) or isinstance(frame, bool) or frame < 0:
+                raise ValueError("USD frame must be a non-negative integer")
+            variants = value.get("variants")
+            if variants is not None and not isinstance(variants, (dict, list)):
+                raise ValueError("USD variants must be an object, array, or null")
+            return {
+                "type": "usd",
+                "scope_name": scope,
+                "variants": variants,
+                "subdivision_level": subdivision,
+                "frame": frame,
+            }
+        if kind == "gltf" and allow_gltf:
+            unknown = sorted(set(value) - {"type", "invert_normal_maps"})
+            invert = value.get("invert_normal_maps")
+            if unknown or (invert is not None and not isinstance(invert, bool)):
+                raise ValueError("glTF settings accept only boolean invert_normal_maps")
+            return {"type": "gltf", "invert_normal_maps": invert}
+        allowed = "usd or gltf" if allow_gltf else "usd"
+        raise ValueError(f"mesh_settings type must be {allowed}")
+
+    @classmethod
+    def _normalize_project_settings(cls, value: dict[str, Any] | None) -> dict[str, Any]:
+        if value is None:
+            value = {}
+        if not isinstance(value, dict):
+            raise ValueError("settings must be an object or null")
+        allowed = {
+            "normal_map_format", "tangent_space_mode", "project_workflow",
+            "default_texture_resolution", "import_cameras", "mesh_unit_scale",
+            "mesh_settings", "auto_unwrap_settings",
+        }
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            raise ValueError(f"Unknown project settings: {unknown}")
+        normal = value.get("normal_map_format")
+        tangent = value.get("tangent_space_mode")
+        workflow = value.get("project_workflow")
+        resolution = value.get("default_texture_resolution")
+        import_cameras = value.get("import_cameras")
+        scale = value.get("mesh_unit_scale")
+        if normal is not None and normal not in {"OpenGL", "DirectX"}:
+            raise ValueError("normal_map_format must be OpenGL or DirectX")
+        if tangent is not None and tangent not in {"PerVertex", "PerFragment"}:
+            raise ValueError("tangent_space_mode must be PerVertex or PerFragment")
+        if workflow is not None and workflow not in {
+            "Default", "TextureSetPerUVTile", "UVTile",
+        }:
+            raise ValueError("project_workflow must be Default, TextureSetPerUVTile, or UVTile")
+        if resolution is not None and (
+            not isinstance(resolution, int)
+            or isinstance(resolution, bool)
+            or not 128 <= resolution <= 8192
+            or resolution & (resolution - 1)
+        ):
+            raise ValueError("default_texture_resolution must be a power of two from 128 to 8192")
+        if import_cameras is not None and not isinstance(import_cameras, bool):
+            raise ValueError("import_cameras must be a boolean")
+        if scale is not None and (
+            not isinstance(scale, (int, float)) or isinstance(scale, bool) or scale < 0
+        ):
+            raise ValueError("mesh_unit_scale must be a non-negative number")
+        return {
+            "normal_map_format": normal,
+            "tangent_space_mode": tangent,
+            "project_workflow": workflow,
+            "default_texture_resolution": resolution,
+            "import_cameras": import_cameras,
+            "mesh_unit_scale": float(scale) if scale is not None else None,
+            "mesh_settings": cls._normalize_mesh_settings(
+                value.get("mesh_settings"), allow_gltf=True
+            ),
+            "auto_unwrap_settings": cls._normalize_auto_unwrap_settings(
+                value.get("auto_unwrap_settings")
+            ),
+        }
 
     @staticmethod
     def _validate_color(color: list[float]) -> None:

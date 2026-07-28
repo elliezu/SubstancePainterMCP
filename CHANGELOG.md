@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.9.0 - 2026-07-28
+
+Version 0.9.0 expands the server from 70 to 75 tools and completes a guarded Painter project lifecycle with typed mesh-import settings.
+
+### Planned and asynchronous project creation
+
+- Added `plan_project_creation` for approved mesh, mesh-map, template, output, backup, overwrite, and context-replacement validation without mutation.
+- Added typed project settings for normal-map format, tangent-space mode, UV workflow, default resolution, cameras, mesh scale, Auto UV, USD, and glTF.
+- Added `create_project` with explicit confirmation and mandatory verified backup before replacing an open project.
+- Bridged Painter's asynchronous project loading through `ProjectEditionEntered` instead of assuming that `project.create()` returning means the project is no longer busy.
+- Added persistent creation state with job ID, timestamps, terminal status, output, Texture Sets, recovery path, and error.
+- Added `get_project_creation_job` with local `.spp` existence and byte-size verification after Painter saves the new project.
+- Closed partial projects and attempted to reopen the verified backup if creation or save failed.
+
+### Safe project switching and saving
+
+- Added `open_project` for `.spp` files below `SP_MCP_PROJECT_ROOTS`.
+- Required a verified backup when the current project has unsaved changes and restored the original or backup if opening the target failed.
+- Added `save_project` with explicit confirmation, Full/Incremental modes, dirty-state verification, file existence, and byte-size checks.
+- Rejected output/current/backup/open-target path collisions before any project context was closed.
+
+### Typed Auto UV and mesh-specific settings
+
+- Added strict schemas for every public `AutoUnwrapSettings` field, including count- or texel-density-based UV tile packing.
+- Validated margin range, island orientation, UV tile count, texel density, and power-of-two reference resolution locally.
+- Added USD scope, variants, subdivision, and frame settings; added glTF normal-map inversion for project creation.
+- Extended existing mesh-reload planning and jobs with Auto UV and USD settings while retaining preserve-strokes, camera, backup, and Texture Set diff behavior.
+- Reported public lifecycle/import support through runtime capability probes.
+
+### Validation
+
+- Expanded the automated suite from 55 to 61 tests and verified all 75 FastMCP schemas.
+- Identified and fixed the real Painter lifecycle boundary where `project.create()` returns while Painter still reports busy.
+- Created a 256px OpenGL project asynchronously from the live sample FBX and verified the 21 MB output.
+- Verified a 955 MB current-project backup, explicit Full save, exact original-project reopen, and automatic failure-safe restoration.
+- Reloaded the original FBX with typed Auto UV settings, preserved strokes, observed zero Texture Set name changes, and verified the final save.
+- Removed the generated project, backup, and dedicated test directory after successful restoration.
+
 ## 0.8.0 - 2026-07-28
 
 Version 0.8.0 expands the server from 65 to 70 tools and closes the filesystem-to-Painter resource pipeline without weakening the server's approved-root model.

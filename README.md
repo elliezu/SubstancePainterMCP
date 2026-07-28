@@ -7,7 +7,7 @@
 
 An MCP server that lets AI clients inspect, audit, edit, and export from a local Adobe Substance 3D Painter project.
 
-Version **0.8.0** provides 70 focused MCP tools. It adds sandboxed project/session resource ingestion, verified resource identities, procedural image-input wiring for Fill/Generator/Filter sources, and Resource-typed baker inputs such as Painter 12.1's skew Offset Map. It remains live-validated against **Substance 3D Painter 12.1.1**.
+Version **0.9.0** provides 75 focused MCP tools. It adds planned, backed-up project creation; asynchronous creation state and file verification; safe project switching; explicit current-project saving; and typed Auto UV, USD, and glTF import settings. It remains live-validated against **Substance 3D Painter 12.1.1**.
 
 > This is an independent community project and is not affiliated with or endorsed by Adobe.
 
@@ -34,6 +34,8 @@ Version **0.8.0** provides 70 focused MCP tools. It adds sandboxed project/sessi
 - Audit project structure and search layers or resources without mutating the project.
 - Preview exact export paths before writing and restrict exports to explicitly allowed directories.
 - Save verified project copies without changing the current project's location.
+- Plan and create projects from approved meshes with optional templates, mesh maps, Auto UV, USD/glTF settings, verified backup, and failure recovery.
+- Open approved projects safely and explicitly save the current project with post-write verification.
 - Detect runtime capabilities instead of trusting Painter's reported Python API version alone.
 - Keep arbitrary Python execution disabled unless the user explicitly opts in.
 
@@ -58,6 +60,8 @@ Painter builds may expose newer features while reporting an older API version st
 |---|---|
 | `painter_status` | Check the connection, Painter/API versions, and whether a project is open. |
 | `get_project_info` | Return the project path and Texture Sets. |
+| `plan_project_creation` | Validate all new-project inputs, typed settings, output, backup, and current-context impact. |
+| `get_project_creation_job` | Poll asynchronous project creation, recovery state, and output-file verification. |
 | `get_capabilities` | Probe channels, blend modes, and version-dependent runtime features. |
 | `audit_project` | Report resolution, channels, layer hygiene, and outdated resources. |
 | `inspect_baking` | Inspect enabled bakers, UV tiles, and mesh-map assignments without baking. |
@@ -122,6 +126,9 @@ Layer names are not unique in Painter. All mutation tools therefore use the UIDs
 | `plan_profile_export` | Preview a curated engine-profile export. |
 | `export_with_profile` | Export with a curated profile and verify generated files. |
 | `save_project_copy` | Write a verified `.spp` backup without relocating the current project. |
+| `create_project` | Back up the current context, asynchronously create/save a project, and recover on failure. |
+| `open_project` | Switch to an approved `.spp`, requiring a backup when the current project is dirty. |
+| `save_project` | Explicitly overwrite and verify the current saved project after `confirm=true`. |
 | `export_smart_material` | Export a Group as a verified `.spsm` file. |
 | `export_smart_mask` | Export a layer mask as a verified `.spmsk` file. |
 | `replace_outdated_resources` | Apply Painter's atomic resource replacement after `confirm=true`. |
@@ -220,7 +227,7 @@ Exports are disabled until `SP_MCP_EXPORT_ROOTS` is configured. `plan_texture_ex
 
 Project copying is independently disabled until `SP_MCP_PROJECT_ROOTS` is configured. `save_project_copy` uses Painter's `save_as_copy`, verifies the resulting file, and confirms that the current project path did not change.
 
-Mesh reload is independently disabled until `SP_MCP_MESH_ROOTS` is configured. `plan_mesh_reload` is read-only; `start_mesh_reload` additionally requires `confirm=true`. A `backup_path` under `SP_MCP_PROJECT_ROOTS` can be supplied to create and verify a project copy before reload. Baking likewise requires `confirm=true` and can take the same optional backup parameters.
+Mesh reload and project creation are independently disabled until `SP_MCP_MESH_ROOTS` is configured. `plan_mesh_reload` is read-only; `start_mesh_reload` additionally requires `confirm=true` and accepts typed Auto UV or USD settings. Project creation also requires an output under `SP_MCP_PROJECT_ROOTS`; optional templates and mesh maps come from `SP_MCP_RESOURCE_ROOTS`. A backup path under `SP_MCP_PROJECT_ROOTS` is mandatory before replacing an open project.
 
 High-poly and cage assignment is independently disabled until `SP_MCP_BAKE_MESH_ROOTS` is configured. `set_baking_mesh_inputs` accepts only existing mesh files below those roots. `preflight_bake` then validates the effective Painter settings before `start_batch_bake` changes any mesh maps.
 
@@ -233,6 +240,8 @@ Resource import is independently disabled until `SP_MCP_RESOURCE_ROOTS` is confi
 - Failed connections stop at the configured timeout instead of hanging for an hour.
 - Connection, HTTP, and Painter script failures are reported as distinct error types.
 - Layer mutations use UIDs to avoid editing the wrong layer when names are duplicated.
+- Project creation separates preflight from execution, requires confirmation and a verified backup before replacing an open context, runs through Painter events, and attempts recovery on failure.
+- New-project output, current-project, backup, and open-target paths are checked for collisions before context switching.
 - Texture exports require approved roots, a preflight plan, explicit overwrite consent, and post-export file verification.
 - Baking and mesh reload require explicit confirmation, expose persistent job state, and never depend on a long-lived HTTP request.
 - Mesh inputs are restricted to approved roots and Painter-supported extensions.
@@ -290,9 +299,16 @@ $env:SP_MCP_BAKE_MESH_ROOTS = "D:\BakeMeshes"
 $env:SP_MCP_RESOURCE_ROOTS = "D:\SubstanceResources"
 .venv\Scripts\python.exe scripts\live_v08.py `
   --image D:\SubstanceResources\validation.png
+
+# v0.9 backed-up async project creation, original reopen, and typed Auto UV mesh reload
+$env:SP_MCP_MESH_ROOTS = "D:\Meshes"
+$env:SP_MCP_PROJECT_ROOTS = "D:\SubstanceProjects"
+.venv\Scripts\python.exe scripts\live_v09.py `
+  --output D:\SubstanceProjects\mcp_created.spp `
+  --backup D:\SubstanceProjects\before_creation.spp
 ```
 
-The 0.8.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 70 FastMCP schemas and 55 automated tests; imported the same PNG into project and session contexts; verified both resource identities; connected the project resource to `OffsetMap`, a temporary Fill Base Color, and a Mask Editor Generator's `texture` input; reset the Generator input from `SourceBitmap` to its original uniform default; restored the linked Offset Map to empty; deleted all temporary layer content; and confirmed exact layer-tree SHA-256 restoration. Project resource imports intentionally remain embedded in the disposable validation project.
+The 0.9.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test project. It verified all 75 FastMCP schemas and 61 automated tests; saved the current 955 MB project; created and verified a 21 MB 256px OpenGL project through a `ProjectEditionEntered` job; verified the backup and explicit Full save; reopened the exact original `.spp`; reloaded the same FBX using typed Auto UV settings while preserving strokes; observed zero added or removed Texture Sets; and verified the final original-project save. The generated project and backup were deleted after successful restoration.
 
 ## Roadmap and release notes
 
@@ -300,6 +316,7 @@ The 0.8.0 validation run used Painter 12.1.1 and a saved three-Texture-Set test 
 - See [docs/PROCEDURAL_AND_BAKING.md](docs/PROCEDURAL_AND_BAKING.md) for typed procedural parameters, Anchor bindings, linked baker settings, and configuration examples.
 - See [docs/PRODUCTION_BAKING.md](docs/PRODUCTION_BAKING.md) for sandboxed mesh inputs, portable presets, preflight, batch jobs, and result manifests.
 - See [docs/RESOURCE_INGESTION.md](docs/RESOURCE_INGESTION.md) for sandboxed imports, safe usages, procedural inputs, and baking Resource properties.
+- See [docs/PROJECT_LIFECYCLE.md](docs/PROJECT_LIFECYCLE.md) for project creation, context switching, Auto UV, USD/glTF settings, jobs, and recovery.
 - See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 - See [docs/ROADMAP.md](docs/ROADMAP.md) for completed milestones and remaining Painter automation work.
 

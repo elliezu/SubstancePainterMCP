@@ -34,6 +34,90 @@ def get_project_info() -> dict[str, Any]:
 
 
 @mcp.tool()
+def plan_project_creation(
+    mesh_file_path: str,
+    output_path: str,
+    mesh_map_file_paths: list[str] | None = None,
+    template_file_path: str | None = None,
+    settings: dict[str, Any] | None = None,
+    overwrite: bool = False,
+    replace_current: bool = False,
+    backup_current_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Validate a new project, typed import settings, context switch, and backup."""
+    return operations.plan_project_creation(
+        mesh_file_path,
+        output_path,
+        mesh_map_file_paths,
+        template_file_path,
+        settings,
+        overwrite,
+        replace_current,
+        backup_current_path,
+        backup_mode,
+        overwrite_backup,
+    )
+
+
+@mcp.tool()
+def create_project(
+    mesh_file_path: str,
+    output_path: str,
+    mesh_map_file_paths: list[str] | None = None,
+    template_file_path: str | None = None,
+    settings: dict[str, Any] | None = None,
+    overwrite: bool = False,
+    replace_current: bool = False,
+    backup_current_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Back up an optional current project, create a typed project, and verify its file."""
+    return operations.create_project(
+        mesh_file_path,
+        output_path,
+        mesh_map_file_paths,
+        template_file_path,
+        settings,
+        overwrite,
+        replace_current,
+        backup_current_path,
+        backup_mode,
+        overwrite_backup,
+        confirm,
+    )
+
+
+@mcp.tool()
+def get_project_creation_job(job_id: str | None = None) -> dict[str, Any]:
+    """Read terminal state and file verification for an asynchronous project creation."""
+    return operations.get_project_creation_job(job_id)
+
+
+@mcp.tool()
+def save_project(mode: str = "Incremental", confirm: bool = False) -> dict[str, Any]:
+    """Overwrite and verify the current saved project after explicit confirmation."""
+    return operations.save_project(mode, confirm)
+
+
+@mcp.tool()
+def open_project(
+    project_path: str,
+    confirm: bool = False,
+    backup_current_path: str | None = None,
+    backup_mode: str = "Incremental",
+    overwrite_backup: bool = False,
+) -> dict[str, Any]:
+    """Open an approved .spp, requiring a backup when the current project is dirty."""
+    return operations.open_project(
+        project_path, confirm, backup_current_path, backup_mode, overwrite_backup
+    )
+
+
+@mcp.tool()
 def get_capabilities() -> dict[str, Any]:
     """Report runtime-supported channels, blend modes, and version-sensitive features."""
     return operations.capabilities()
@@ -190,6 +274,8 @@ def plan_mesh_reload(
     overwrite_backup: bool = False,
     preserve_strokes: bool = True,
     import_cameras: bool = True,
+    auto_unwrap_settings: dict[str, Any] | None = None,
+    mesh_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate a mesh reload and preview texture-set and backup impact."""
     return operations.plan_mesh_reload(
@@ -199,6 +285,8 @@ def plan_mesh_reload(
         overwrite_backup,
         preserve_strokes,
         import_cameras,
+        auto_unwrap_settings,
+        mesh_settings,
     )
 
 
@@ -211,6 +299,8 @@ def start_mesh_reload(
     overwrite_backup: bool = False,
     preserve_strokes: bool = True,
     import_cameras: bool = True,
+    auto_unwrap_settings: dict[str, Any] | None = None,
+    mesh_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Back up and asynchronously reload a mesh after explicit confirmation."""
     return operations.start_mesh_reload(
@@ -221,6 +311,8 @@ def start_mesh_reload(
         overwrite_backup,
         preserve_strokes,
         import_cameras,
+        auto_unwrap_settings,
+        mesh_settings,
     )
 
 
